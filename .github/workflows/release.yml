@@ -39,5 +39,5 @@ jobs:
           gh release create "v${{ steps.package.outputs.version }}" \
             build/creative-pear-monitor.zip \
             --title "Creative Pear Monitor ${{ steps.package.outputs.version }}" \
-            --notes "Actualización automática generada desde la rama main." \
+            --notes "Nueva versión generada desde la rama main. Instálala manualmente desde WordPress." \
             --latest

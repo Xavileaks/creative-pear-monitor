@@ -24,7 +24,7 @@ final class Creative_Pear_Monitor_Updater
 
         add_filter('pre_set_site_transient_update_plugins', [$this, 'inject_update']);
         add_filter('plugins_api', [$this, 'plugin_information'], 20, 3);
-        add_filter('auto_update_plugin', [$this, 'enable_automatic_update'], 10, 2);
+        add_filter('auto_update_plugin', [$this, 'disable_automatic_update'], 10, 2);
     }
 
     public function inject_update($transient)
@@ -50,7 +50,7 @@ final class Creative_Pear_Monitor_Updater
             'tested' => get_bloginfo('version'),
             'icons' => [],
             'banners' => [],
-            'autoupdate' => true,
+            'autoupdate' => false,
         ];
 
         return $transient;
@@ -82,41 +82,18 @@ final class Creative_Pear_Monitor_Updater
                 ),
                 'changelog' => ! empty($release['notes'])
                     ? wpautop(esc_html($release['notes']))
-                    : $this->text('Mejoras y correcciones automáticas.', 'Automatic improvements and fixes.'),
+                    : $this->text('Mejoras y correcciones.', 'Improvements and fixes.'),
             ],
         ];
     }
 
-    public function enable_automatic_update($enabled, $item)
+    public function disable_automatic_update($enabled, $item)
     {
         if (is_object($item) && (($item->plugin ?? '') === $this->plugin_basename || ($item->slug ?? '') === self::SLUG)) {
-            return true;
+            return false;
         }
 
         return $enabled;
-    }
-
-    public function install_available_update(): void
-    {
-        if (! function_exists('wp_update_plugins')) {
-            require_once ABSPATH.'wp-admin/includes/update.php';
-        }
-        delete_site_transient('update_plugins');
-        delete_site_transient(self::CACHE_KEY);
-        wp_update_plugins();
-
-        $updates = get_site_transient('update_plugins');
-        if (! is_object($updates) || empty($updates->response[$this->plugin_basename])) {
-            return;
-        }
-
-        require_once ABSPATH.'wp-admin/includes/file.php';
-        require_once ABSPATH.'wp-admin/includes/class-wp-upgrader.php';
-        $upgrader = new Plugin_Upgrader(new Automatic_Upgrader_Skin);
-        $result = $upgrader->upgrade($this->plugin_basename, ['clear_update_cache' => true]);
-        if (is_wp_error($result)) {
-            error_log('Creative Pear Monitor update error: '.$result->get_error_message());
-        }
     }
 
     private function latest_release(): ?array

@@ -25,7 +25,7 @@ final class Creative_Pear_Monitor
 
     private const EVENT = 'creative_pear_monitor_report';
 
-    private const UPDATE_EVENT = 'creative_pear_monitor_update';
+    private const LEGACY_UPDATE_EVENT = 'creative_pear_monitor_update';
 
     private const CONNECTION_HASH_OPTION = 'creative_pear_monitor_connection_hash';
 
@@ -38,7 +38,6 @@ final class Creative_Pear_Monitor
         $this->updater = new Creative_Pear_Monitor_Updater(__FILE__, self::VERSION);
         add_filter('cron_schedules', [$this, 'schedule']);
         add_action(self::EVENT, [$this, 'send_report']);
-        add_action(self::UPDATE_EVENT, [$this->updater, 'install_available_update']);
         add_action('admin_menu', [$this, 'menu']);
         add_action('admin_init', [$this, 'register']);
         add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
@@ -64,16 +63,13 @@ final class Creative_Pear_Monitor
         if (! wp_next_scheduled(self::EVENT)) {
             wp_schedule_event(time() + 60, 'creative_pear_five_minutes', self::EVENT);
         }
-        if (! wp_next_scheduled(self::UPDATE_EVENT)) {
-            wp_schedule_event(time() + 90, 'creative_pear_five_minutes', self::UPDATE_EVENT);
-        }
         update_option('creative_pear_monitor_version', self::VERSION, false);
     }
 
     public static function deactivate(): void
     {
         wp_clear_scheduled_hook(self::EVENT);
-        wp_clear_scheduled_hook(self::UPDATE_EVENT);
+        wp_clear_scheduled_hook(self::LEGACY_UPDATE_EVENT);
     }
 
     public function schedule(array $schedules): array
@@ -132,9 +128,8 @@ final class Creative_Pear_Monitor
             return;
         }
         wp_clear_scheduled_hook(self::EVENT);
-        wp_clear_scheduled_hook(self::UPDATE_EVENT);
+        wp_clear_scheduled_hook(self::LEGACY_UPDATE_EVENT);
         wp_schedule_event(time() + 10, 'creative_pear_five_minutes', self::EVENT);
-        wp_schedule_event(time() + 60, 'creative_pear_five_minutes', self::UPDATE_EVENT);
         $settings = (array) get_option(self::OPTION, []);
         $normalized_settings = [
             'site_id' => absint($settings['site_id'] ?? 0),

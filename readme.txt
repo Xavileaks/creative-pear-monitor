@@ -6,7 +6,7 @@ Stable tag: 1.2.0
 
 Conector para clientes administrados por Creative Pear.
 
-Versión 1.2.0: actualizaciones automáticas desde GitHub, sincronización inmediata tras cambios técnicos y acceso directo a Settings.
+Versión 1.2.0: avisos de nuevas versiones desde GitHub, sincronización inmediata tras cambios técnicos y acceso directo a Settings.
 
 == Instalación ==
 1. Instala el ZIP desde Plugins > Añadir plugin > Subir plugin.
@@ -18,4 +18,4 @@ Versión 1.2.0: actualizaciones automáticas desde GitHub, sincronización inmed
 El plugin reporta versiones, actualizaciones pendientes, administradores, PHP, presencia de formularios, estado reciente de wp_mail y configuración básica de WooCommerce. No envía contraseñas ni contenido de usuarios.
 
 == Actualizaciones ==
-Las nuevas versiones publicadas en GitHub se detectan y se instalan automáticamente. El antiguo intervalo de 15 minutos se elimina al actualizar y se sustituye por eventos inmediatos más un pulso de respaldo cada cinco minutos.
+Las nuevas versiones publicadas en GitHub aparecen en la pantalla de plugins de WordPress. La instalación solo se realiza cuando un administrador pulsa «Actualizar ahora». El antiguo intervalo de 15 minutos para los reportes se elimina al actualizar y se sustituye por eventos inmediatos más un pulso de respaldo cada cinco minutos.
