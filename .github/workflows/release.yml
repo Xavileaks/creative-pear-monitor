@@ -1,0 +1,43 @@
+name: Publicar plugin de WordPress
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Crear ZIP versionado
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_VERSION="$(sed -nE 's/^ \* Version: ([0-9]+\.[0-9]+)\.[0-9]+/\1/p' creative-pear-monitor.php | head -n1)"
+          VERSION="${BASE_VERSION}.${GITHUB_RUN_NUMBER}"
+          sed -i -E "s/^ \* Version: .*/ * Version: ${VERSION}/" creative-pear-monitor.php
+          sed -i -E "s/private const VERSION = '[^']+';/private const VERSION = '${VERSION}';/" creative-pear-monitor.php
+          sed -i -E "s/^Stable tag: .*/Stable tag: ${VERSION}/" readme.txt
+          mkdir -p build/creative-pear-monitor
+          rsync -a --exclude='.git' --exclude='.github' --exclude='build' --exclude='README.md' --exclude='.gitignore' ./ build/creative-pear-monitor/
+          cd build
+          zip -qr creative-pear-monitor.zip creative-pear-monitor
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "v${{ steps.package.outputs.version }}" \
+            build/creative-pear-monitor.zip \
+            --title "Creative Pear Monitor ${{ steps.package.outputs.version }}" \
+            --notes "Actualización automática generada desde la rama main." \
+            --latest
