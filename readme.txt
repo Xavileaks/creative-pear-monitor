@@ -12,7 +12,7 @@ Versión 1.2.0: actualizaciones automáticas desde GitHub, sincronización inmed
 1. Instala el ZIP desde Plugins > Añadir plugin > Subir plugin.
 2. Actívalo.
 3. Abre Ajustes > Creative Pear Monitor.
-4. Pega el ID del sitio y la clave generada por el dashboard.
+4. Pega el ID del sitio y la clave generada por el dashboard. La URL del panel ya viene configurada.
 5. Pulsa "Enviar reporte ahora" para validar la conexión.
 
 El plugin reporta versiones, actualizaciones pendientes, administradores, PHP, presencia de formularios, estado reciente de wp_mail y configuración básica de WooCommerce. No envía contraseñas ni contenido de usuarios.

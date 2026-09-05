@@ -15,6 +15,6 @@ Plugin de WordPress que conecta los sitios administrados por Creative Pear con s
 1. Descarga `creative-pear-monitor.zip` desde la última release.
 2. Instálalo en **Plugins → Añadir plugin → Subir plugin**.
 3. Actívalo y abre **Settings** bajo el nombre del plugin.
-4. Introduce la URL del panel, el ID del sitio y la clave del agente.
+4. Introduce el ID del sitio y la clave del agente. La URL de Creative Pear Status ya viene configurada.
 
 El plugin no incluye claves ni contraseñas en el repositorio y nunca envía contenido privado de WordPress.

@@ -5,11 +5,15 @@ defined('ABSPATH') || exit;
 final class Creative_Pear_Monitor_Updater
 {
     private const SLUG = 'creative-pear-monitor';
+
     private const REPOSITORY = 'Xavileaks/creative-pear-monitor';
+
     private const CACHE_KEY = 'creative_pear_monitor_github_release';
 
     private string $plugin_file;
+
     private string $plugin_basename;
+
     private string $current_version;
 
     public function __construct(string $plugin_file, string $current_version)
@@ -25,7 +29,9 @@ final class Creative_Pear_Monitor_Updater
 
     public function inject_update($transient)
     {
-        if (! is_object($transient)) return $transient;
+        if (! is_object($transient)) {
+            return $transient;
+        }
 
         $release = $this->latest_release();
         if (! $release || ! version_compare($this->current_version, $release['version'], '<')) {
@@ -52,9 +58,13 @@ final class Creative_Pear_Monitor_Updater
 
     public function plugin_information($result, string $action, $args)
     {
-        if ($action !== 'plugin_information' || empty($args->slug) || $args->slug !== self::SLUG) return $result;
+        if ($action !== 'plugin_information' || empty($args->slug) || $args->slug !== self::SLUG) {
+            return $result;
+        }
         $release = $this->latest_release();
-        if (! $release) return $result;
+        if (! $release) {
+            return $result;
+        }
 
         return (object) [
             'name' => 'Creative Pear Monitor',
@@ -66,8 +76,13 @@ final class Creative_Pear_Monitor_Updater
             'requires_php' => '7.4',
             'download_link' => $release['package'],
             'sections' => [
-                'description' => 'Conecta WordPress con el centro de control técnico de Creative Pear.',
-                'changelog' => ! empty($release['notes']) ? wpautop(esc_html($release['notes'])) : 'Mejoras y correcciones automáticas.',
+                'description' => $this->text(
+                    'Conecta WordPress con el centro de control técnico de Creative Pear.',
+                    'Connects WordPress to the Creative Pear technical control center.'
+                ),
+                'changelog' => ! empty($release['notes'])
+                    ? wpautop(esc_html($release['notes']))
+                    : $this->text('Mejoras y correcciones automáticas.', 'Automatic improvements and fixes.'),
             ],
         ];
     }
@@ -77,30 +92,39 @@ final class Creative_Pear_Monitor_Updater
         if (is_object($item) && (($item->plugin ?? '') === $this->plugin_basename || ($item->slug ?? '') === self::SLUG)) {
             return true;
         }
+
         return $enabled;
     }
 
     public function install_available_update(): void
     {
-        if (! function_exists('wp_update_plugins')) require_once ABSPATH.'wp-admin/includes/update.php';
+        if (! function_exists('wp_update_plugins')) {
+            require_once ABSPATH.'wp-admin/includes/update.php';
+        }
         delete_site_transient('update_plugins');
         delete_site_transient(self::CACHE_KEY);
         wp_update_plugins();
 
         $updates = get_site_transient('update_plugins');
-        if (! is_object($updates) || empty($updates->response[$this->plugin_basename])) return;
+        if (! is_object($updates) || empty($updates->response[$this->plugin_basename])) {
+            return;
+        }
 
         require_once ABSPATH.'wp-admin/includes/file.php';
         require_once ABSPATH.'wp-admin/includes/class-wp-upgrader.php';
-        $upgrader = new Plugin_Upgrader(new Automatic_Upgrader_Skin());
+        $upgrader = new Plugin_Upgrader(new Automatic_Upgrader_Skin);
         $result = $upgrader->upgrade($this->plugin_basename, ['clear_update_cache' => true]);
-        if (is_wp_error($result)) error_log('Creative Pear Monitor update error: '.$result->get_error_message());
+        if (is_wp_error($result)) {
+            error_log('Creative Pear Monitor update error: '.$result->get_error_message());
+        }
     }
 
     private function latest_release(): ?array
     {
         $cached = get_site_transient(self::CACHE_KEY);
-        if (is_array($cached) && ! empty($cached['version'])) return $cached;
+        if (is_array($cached) && ! empty($cached['version'])) {
+            return $cached;
+        }
 
         $response = wp_remote_get('https://api.github.com/repos/'.self::REPOSITORY.'/releases/latest', [
             'timeout' => 12,
@@ -109,10 +133,14 @@ final class Creative_Pear_Monitor_Updater
                 'User-Agent' => 'Creative-Pear-Monitor/'.$this->current_version,
             ],
         ]);
-        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) return null;
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            return null;
+        }
 
         $data = json_decode(wp_remote_retrieve_body($response), true);
-        if (! is_array($data) || empty($data['tag_name']) || empty($data['assets'])) return null;
+        if (! is_array($data) || empty($data['tag_name']) || empty($data['assets'])) {
+            return null;
+        }
 
         $package = null;
         foreach ($data['assets'] as $asset) {
@@ -121,7 +149,9 @@ final class Creative_Pear_Monitor_Updater
                 break;
             }
         }
-        if (! $package) return null;
+        if (! $package) {
+            return null;
+        }
 
         $release = [
             'version' => ltrim((string) $data['tag_name'], 'vV'),
@@ -130,6 +160,14 @@ final class Creative_Pear_Monitor_Updater
             'notes' => (string) ($data['body'] ?? ''),
         ];
         set_site_transient(self::CACHE_KEY, $release, 5 * MINUTE_IN_SECONDS);
+
         return $release;
+    }
+
+    private function text(string $spanish, string $english): string
+    {
+        $locale = function_exists('determine_locale') ? determine_locale() : get_locale();
+
+        return strpos(strtolower(str_replace('-', '_', $locale)), 'es') === 0 ? $spanish : $english;
     }
 }

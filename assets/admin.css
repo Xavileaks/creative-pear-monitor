@@ -1,0 +1,99 @@
+.cp-monitor-settings {
+    --cp-green: #218739;
+    --cp-green-soft: #edf8ef;
+    --cp-red: #b42318;
+    --cp-red-soft: #fff1f0;
+    max-width: 1120px;
+}
+
+.cp-monitor-intro {
+    max-width: 780px;
+    color: #50575e;
+}
+
+.cp-monitor-settings .form-table {
+    max-width: 1080px;
+}
+
+.cp-monitor-settings .form-table th {
+    width: 190px;
+}
+
+.cp-monitor-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+}
+
+.cp-monitor-actions form {
+    margin: 0;
+}
+
+.cp-monitor-actions .button {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding-inline: 18px;
+}
+
+.cp-connection-status {
+    max-width: 760px;
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    margin-top: 18px;
+    border: 1px solid #f1c8c5;
+    border-radius: 12px;
+    padding: 16px 18px;
+    color: var(--cp-red);
+    background: var(--cp-red-soft);
+}
+
+.cp-connection-status.is-connected {
+    border-color: #b8dfc0;
+    color: var(--cp-green);
+    background: var(--cp-green-soft);
+}
+
+.cp-connection-status .dashicons {
+    width: 24px;
+    height: 24px;
+    font-size: 24px;
+}
+
+.cp-connection-status strong {
+    display: block;
+    margin-top: 1px;
+    font-size: 14px;
+}
+
+.cp-connection-status p {
+    margin: 4px 0 0;
+    color: #50575e;
+    line-height: 1.5;
+}
+
+@media screen and (max-width: 782px) {
+    .cp-monitor-settings .form-table th {
+        width: auto;
+    }
+
+    .cp-monitor-settings .form-table input {
+        width: 100%;
+        max-width: none;
+    }
+
+    .cp-monitor-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cp-monitor-actions .button {
+        width: 100%;
+        padding-inline: 10px;
+    }
+}

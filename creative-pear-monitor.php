@@ -7,10 +7,10 @@
  * Author: Creative Pear
  * Author URI: https://creativepearagency.com
  * Update URI: https://github.com/Xavileaks/creative-pear-monitor
+ * Text Domain: creative-pear-monitor
  * Requires at least: 6.2
  * Requires PHP: 7.4
  */
-
 defined('ABSPATH') || exit;
 
 require_once __DIR__.'/includes/class-creative-pear-monitor-updater.php';
@@ -18,10 +18,19 @@ require_once __DIR__.'/includes/class-creative-pear-monitor-updater.php';
 final class Creative_Pear_Monitor
 {
     private const VERSION = '1.2.0';
+
     private const OPTION = 'creative_pear_monitor_settings';
+
+    private const DASHBOARD_URL = 'https://status.creativepearagency.com';
+
     private const EVENT = 'creative_pear_monitor_report';
+
     private const UPDATE_EVENT = 'creative_pear_monitor_update';
+
+    private const CONNECTION_HASH_OPTION = 'creative_pear_monitor_connection_hash';
+
     private bool $report_queued = false;
+
     private Creative_Pear_Monitor_Updater $updater;
 
     public function __construct()
@@ -32,8 +41,10 @@ final class Creative_Pear_Monitor
         add_action(self::UPDATE_EVENT, [$this->updater, 'install_available_update']);
         add_action('admin_menu', [$this, 'menu']);
         add_action('admin_init', [$this, 'register']);
+        add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
         add_action('plugins_loaded', [$this, 'migrate_schedule']);
         add_filter('plugin_action_links_'.plugin_basename(__FILE__), [$this, 'action_links']);
+        add_filter('all_plugins', [$this, 'localize_plugin_data']);
         add_action('update_option_'.self::OPTION, [$this, 'queue_report'], 10, 2);
         add_action('activated_plugin', [$this, 'queue_report']);
         add_action('deactivated_plugin', [$this, 'queue_report']);
@@ -50,8 +61,12 @@ final class Creative_Pear_Monitor
 
     public static function activate(): void
     {
-        if (! wp_next_scheduled(self::EVENT)) wp_schedule_event(time() + 60, 'creative_pear_five_minutes', self::EVENT);
-        if (! wp_next_scheduled(self::UPDATE_EVENT)) wp_schedule_event(time() + 90, 'creative_pear_five_minutes', self::UPDATE_EVENT);
+        if (! wp_next_scheduled(self::EVENT)) {
+            wp_schedule_event(time() + 60, 'creative_pear_five_minutes', self::EVENT);
+        }
+        if (! wp_next_scheduled(self::UPDATE_EVENT)) {
+            wp_schedule_event(time() + 90, 'creative_pear_five_minutes', self::UPDATE_EVENT);
+        }
         update_option('creative_pear_monitor_version', self::VERSION, false);
     }
 
@@ -63,7 +78,11 @@ final class Creative_Pear_Monitor
 
     public function schedule(array $schedules): array
     {
-        $schedules['creative_pear_five_minutes'] = ['interval' => 300, 'display' => 'Cada 5 minutos'];
+        $schedules['creative_pear_five_minutes'] = [
+            'interval' => 300,
+            'display' => $this->text('Cada 5 minutos', 'Every 5 minutes'),
+        ];
+
         return $schedules;
     }
 
@@ -74,23 +93,68 @@ final class Creative_Pear_Monitor
 
     public function action_links(array $links): array
     {
-        array_unshift($links, '<a href="'.esc_url(admin_url('options-general.php?page=creative-pear-monitor')).'">Settings</a>');
+        array_unshift($links, '<a href="'.esc_url(admin_url('options-general.php?page=creative-pear-monitor')).'">'.esc_html($this->text('Ajustes', 'Settings')).'</a>');
+
         return $links;
+    }
+
+    public function localize_plugin_data(array $plugins): array
+    {
+        $plugin_file = plugin_basename(__FILE__);
+
+        if (isset($plugins[$plugin_file])) {
+            $plugins[$plugin_file]['Description'] = $this->text(
+                'Envía inventario técnico y señales de salud al centro de control de Creative Pear.',
+                'Sends technical inventory and health signals to the Creative Pear control center.'
+            );
+        }
+
+        return $plugins;
+    }
+
+    public function admin_assets(string $hook): void
+    {
+        if ($hook !== 'settings_page_creative-pear-monitor') {
+            return;
+        }
+
+        wp_enqueue_style(
+            'creative-pear-monitor-admin',
+            plugin_dir_url(__FILE__).'assets/admin.css',
+            [],
+            self::VERSION
+        );
     }
 
     public function migrate_schedule(): void
     {
-        if (get_option('creative_pear_monitor_version') === self::VERSION) return;
+        if (get_option('creative_pear_monitor_version') === self::VERSION) {
+            return;
+        }
         wp_clear_scheduled_hook(self::EVENT);
         wp_clear_scheduled_hook(self::UPDATE_EVENT);
         wp_schedule_event(time() + 10, 'creative_pear_five_minutes', self::EVENT);
         wp_schedule_event(time() + 60, 'creative_pear_five_minutes', self::UPDATE_EVENT);
+        $settings = (array) get_option(self::OPTION, []);
+        $normalized_settings = [
+            'site_id' => absint($settings['site_id'] ?? 0),
+            'key' => sanitize_text_field($settings['key'] ?? ''),
+        ];
+        if ($settings !== $normalized_settings) {
+            update_option(self::OPTION, $normalized_settings, false);
+            $settings = $normalized_settings;
+        }
+        if (get_option('creative_pear_monitor_last_success') && $this->has_credentials($settings)) {
+            update_option(self::CONNECTION_HASH_OPTION, $this->connection_hash($settings), false);
+        }
         update_option('creative_pear_monitor_version', self::VERSION, false);
     }
 
     public function queue_report(...$unused): void
     {
-        if ($this->report_queued) return;
+        if ($this->report_queued) {
+            return;
+        }
         $this->report_queued = true;
         add_action('shutdown', [$this, 'send_report'], 100);
     }
@@ -98,33 +162,122 @@ final class Creative_Pear_Monitor
     public function register(): void
     {
         register_setting('creative_pear_monitor', self::OPTION, ['sanitize_callback' => function ($value) {
-            return ['site_id' => absint($value['site_id'] ?? 0), 'key' => sanitize_text_field($value['key'] ?? ''), 'dashboard' => esc_url_raw($value['dashboard'] ?? 'https://status.creativepearagency.com')];
+            return [
+                'site_id' => absint($value['site_id'] ?? 0),
+                'key' => sanitize_text_field($value['key'] ?? ''),
+            ];
         }]);
     }
 
     public function page(): void
     {
-        if (! current_user_can('manage_options')) return;
-        $settings = get_option(self::OPTION, ['dashboard' => 'https://status.creativepearagency.com', 'site_id' => '', 'key' => '']);
+        if (! current_user_can('manage_options')) {
+            return;
+        }
+
+        $settings = (array) get_option(self::OPTION, ['site_id' => '', 'key' => '']);
+        $notice = null;
+
         if (isset($_POST['creative_pear_send_now']) && check_admin_referer('creative_pear_send_now')) {
             $result = $this->send_report();
-            echo '<div class="notice '.(is_wp_error($result) ? 'notice-error' : 'notice-success').' is-dismissible"><p>'.esc_html(is_wp_error($result) ? $result->get_error_message() : 'Reporte enviado correctamente.').'</p></div>';
+            $notice = [
+                'class' => is_wp_error($result) ? 'notice-error' : 'notice-success',
+                'message' => is_wp_error($result)
+                    ? $result->get_error_message()
+                    : $this->text('Reporte enviado correctamente.', 'Report sent successfully.'),
+            ];
+        }
+
+        $last_success = (int) get_option('creative_pear_monitor_last_success', 0);
+        $saved_hash = (string) get_option(self::CONNECTION_HASH_OPTION, '');
+        $configured = $this->has_credentials($settings);
+        $connected = $configured && $last_success > 0 && hash_equals($saved_hash, $this->connection_hash($settings));
+
+        if ($connected) {
+            $status_title = $this->text('Conectado correctamente', 'Connected successfully');
+            $status_message = sprintf(
+                $this->text(
+                    'Este WordPress está enviando datos técnicos de forma segura. Última conexión correcta hace %s.',
+                    'This WordPress site is securely sending technical data. Last successful connection was %s ago.'
+                ),
+                human_time_diff($last_success, time())
+            );
+        } elseif ($configured) {
+            $status_title = $this->text('Conexión pendiente de verificación', 'Connection awaiting verification');
+            $status_message = $this->text(
+                'Guarda los datos o envía un reporte para comprobar el ID y la clave del agente.',
+                'Save the details or send a report to verify the site ID and agent key.'
+            );
+        } else {
+            $status_title = $this->text('El sitio todavía no está conectado', 'The site is not connected yet');
+            $status_message = $this->text(
+                'Introduce el ID del sitio y la clave del agente generados en Creative Pear Status.',
+                'Enter the site ID and agent key generated in Creative Pear Status.'
+            );
+        }
+
+        if ($notice) {
+            echo '<div class="notice '.esc_attr($notice['class']).' is-dismissible"><p>'.esc_html($notice['message']).'</p></div>';
         }
         ?>
-        <div class="wrap"><h1>Creative Pear Monitor</h1><p>Conecta este WordPress con el centro de control. El agente solo envía datos técnicos; nunca envía contraseñas ni contenido privado.</p>
-        <form method="post" action="options.php"><?php settings_fields('creative_pear_monitor'); ?>
-        <table class="form-table"><tr><th><label for="cp-dashboard">URL del panel</label></th><td><input class="regular-text" id="cp-dashboard" name="<?php echo esc_attr(self::OPTION); ?>[dashboard]" type="url" value="<?php echo esc_attr($settings['dashboard']); ?>" required></td></tr>
-        <tr><th><label for="cp-site">ID del sitio</label></th><td><input id="cp-site" name="<?php echo esc_attr(self::OPTION); ?>[site_id]" type="number" value="<?php echo esc_attr($settings['site_id']); ?>" required></td></tr>
-        <tr><th><label for="cp-key">Clave del agente</label></th><td><input class="large-text" id="cp-key" name="<?php echo esc_attr(self::OPTION); ?>[key]" type="password" autocomplete="off" value="<?php echo esc_attr($settings['key']); ?>" required></td></tr></table><?php submit_button('Guardar conexión'); ?></form>
-        <form method="post"><?php wp_nonce_field('creative_pear_send_now'); ?><p><button class="button button-secondary" name="creative_pear_send_now" value="1">Enviar reporte ahora</button></p></form></div>
+        <div class="wrap cp-monitor-settings">
+            <h1>Creative Pear Monitor</h1>
+            <p class="cp-monitor-intro">
+                <?php echo esc_html($this->text(
+                    'Conecta este WordPress con el centro de control. El agente solo envía datos técnicos; nunca envía contraseñas ni contenido privado.',
+                    'Connect this WordPress site to the control center. The agent only sends technical data; it never sends passwords or private content.'
+                )); ?>
+            </p>
+
+            <form id="cp-monitor-settings-form" method="post" action="options.php">
+                <?php settings_fields('creative_pear_monitor'); ?>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th><label for="cp-site"><?php echo esc_html($this->text('ID del sitio', 'Site ID')); ?></label></th>
+                        <td><input id="cp-site" name="<?php echo esc_attr(self::OPTION); ?>[site_id]" type="number" value="<?php echo esc_attr($settings['site_id'] ?? ''); ?>" required></td>
+                    </tr>
+                    <tr>
+                        <th><label for="cp-key"><?php echo esc_html($this->text('Clave del agente', 'Agent key')); ?></label></th>
+                        <td><input class="large-text" id="cp-key" name="<?php echo esc_attr(self::OPTION); ?>[key]" type="password" autocomplete="off" value="<?php echo esc_attr($settings['key'] ?? ''); ?>" required></td>
+                    </tr>
+                </table>
+            </form>
+
+            <div class="cp-monitor-actions">
+                <button class="button button-primary" type="submit" form="cp-monitor-settings-form">
+                    <?php echo esc_html($this->text('Guardar conexión', 'Save connection')); ?>
+                </button>
+                <form method="post">
+                    <?php wp_nonce_field('creative_pear_send_now'); ?>
+                    <button class="button button-secondary" name="creative_pear_send_now" value="1">
+                        <?php echo esc_html($this->text('Enviar reporte ahora', 'Send report now')); ?>
+                    </button>
+                </form>
+            </div>
+
+            <div class="cp-connection-status <?php echo $connected ? 'is-connected' : 'is-disconnected'; ?>" role="status">
+                <span class="dashicons <?php echo $connected ? 'dashicons-yes-alt' : 'dashicons-warning'; ?>" aria-hidden="true"></span>
+                <div>
+                    <strong><?php echo esc_html($status_title); ?></strong>
+                    <p><?php echo esc_html($status_message); ?></p>
+                </div>
+            </div>
+        </div>
         <?php
     }
 
     public function send_report()
     {
         $settings = get_option(self::OPTION, []);
-        if (empty($settings['site_id']) || empty($settings['key']) || empty($settings['dashboard'])) return new WP_Error('cp_not_configured', 'Configura el ID, la URL y la clave del agente.');
-        wp_update_plugins(); wp_update_themes();
+        if (! $this->has_credentials($settings)) {
+            return new WP_Error(
+                'cp_not_configured',
+                $this->text('Configura el ID del sitio y la clave del agente.', 'Configure the site ID and agent key.')
+            );
+        }
+
+        wp_update_plugins();
+        wp_update_themes();
         $plugin_updates = get_site_transient('update_plugins');
         $theme_updates = get_site_transient('update_themes');
         $admins = array_map(fn ($user) => ['id' => (string) $user->ID, 'username' => $user->user_login, 'email' => $user->user_email, 'display_name' => $user->display_name], get_users(['role' => 'administrator']));
@@ -193,18 +346,53 @@ final class Creative_Pear_Monitor
                 'inventory_hash' => $inventory_hash,
             ],
         ];
-        $url = trailingslashit($settings['dashboard']).'api/agent/'.absint($settings['site_id']).'/report';
+        $url = trailingslashit(self::DASHBOARD_URL).'api/agent/'.absint($settings['site_id']).'/report';
         $response = wp_remote_post($url, ['timeout' => 20, 'headers' => ['Content-Type' => 'application/json', 'Accept' => 'application/json', 'X-CP-Agent-Key' => $settings['key']], 'body' => wp_json_encode($payload)]);
-        if (is_wp_error($response)) return $response;
+        if (is_wp_error($response)) {
+            return $response;
+        }
         $code = wp_remote_retrieve_response_code($response);
-        if ($code < 200 || $code >= 300) return new WP_Error('cp_remote_error', 'El panel respondió con HTTP '.$code.'. Revisa el ID y la clave.');
+        if ($code < 200 || $code >= 300) {
+            return new WP_Error(
+                'cp_remote_error',
+                sprintf(
+                    $this->text(
+                        'El panel respondió con HTTP %d. Revisa el ID y la clave.',
+                        'The control center returned HTTP %d. Check the site ID and agent key.'
+                    ),
+                    $code
+                )
+            );
+        }
+
         update_option('creative_pear_monitor_last_success', time(), false);
+        update_option(self::CONNECTION_HASH_OPTION, $this->connection_hash($settings), false);
+
         return true;
+    }
+
+    private function has_credentials(array $settings): bool
+    {
+        return ! empty($settings['site_id']) && ! empty($settings['key']);
+    }
+
+    private function connection_hash(array $settings): string
+    {
+        return hash('sha256', absint($settings['site_id'] ?? 0).'|'.sanitize_text_field($settings['key'] ?? ''));
+    }
+
+    private function text(string $spanish, string $english): string
+    {
+        $locale = function_exists('determine_locale') ? determine_locale() : get_locale();
+
+        return strpos(strtolower(str_replace('-', '_', $locale)), 'es') === 0 ? $spanish : $english;
     }
 
     private function woocommerce_details(bool $enabled): array
     {
-        if (! $enabled || ! function_exists('WC')) return ['active' => false, 'sandbox' => false, 'gateways' => []];
+        if (! $enabled || ! function_exists('WC')) {
+            return ['active' => false, 'sandbox' => false, 'gateways' => []];
+        }
         $gateways = [];
         $available = WC()->payment_gateways() ? WC()->payment_gateways()->payment_gateways() : [];
         foreach ($available as $gateway) {
@@ -213,6 +401,7 @@ final class Creative_Pear_Monitor
             $test_mode = in_array($test_value, ['yes', 'true', '1', 'test', 'sandbox'], true);
             $gateways[] = ['id' => $gateway->id, 'title' => wp_strip_all_tags($gateway->get_title()), 'enabled' => $gateway->enabled === 'yes', 'test_mode' => $test_mode];
         }
+
         return [
             'active' => true,
             'sandbox' => count(array_filter($gateways, fn ($gateway) => $gateway['enabled'] && $gateway['test_mode'])) > 0,
@@ -230,8 +419,9 @@ final class Creative_Pear_Monitor
         $size = $wpdb->get_var($wpdb->prepare('SELECT SUM(data_length + index_length) FROM information_schema.tables WHERE table_schema = %s', DB_NAME));
         $autoload = $wpdb->get_var("SELECT SUM(LENGTH(option_value)) FROM {$wpdb->options} WHERE autoload IN ('yes','on','auto-on','auto')");
         $transients = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE '_transient_%'");
+
         return ['size_bytes' => (int) $size, 'autoload_bytes' => (int) $autoload, 'transients' => (int) $transients];
     }
 }
 
-new Creative_Pear_Monitor();
+new Creative_Pear_Monitor;
