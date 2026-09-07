@@ -18,4 +18,4 @@ Versión 1.2.0: avisos de nuevas versiones desde GitHub, sincronización inmedia
 El plugin reporta versiones, actualizaciones pendientes, administradores, PHP, presencia de formularios, estado reciente de wp_mail y configuración básica de WooCommerce. No envía contraseñas ni contenido de usuarios.
 
 == Actualizaciones ==
-Las nuevas versiones publicadas en GitHub aparecen en la pantalla de plugins de WordPress. La instalación solo se realiza cuando un administrador pulsa «Actualizar ahora». El antiguo intervalo de 15 minutos para los reportes se elimina al actualizar y se sustituye por eventos inmediatos más un pulso de respaldo cada cinco minutos.
+Las nuevas versiones publicadas en GitHub se comprueban cada cinco minutos y aparecen en la pantalla de plugins de WordPress. La instalación solo se realiza cuando un administrador pulsa «Actualizar ahora». El antiguo intervalo de 15 minutos para los reportes se elimina al actualizar y se sustituye por eventos inmediatos más un pulso de respaldo cada cinco minutos.

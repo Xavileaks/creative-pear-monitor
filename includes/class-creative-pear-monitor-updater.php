@@ -38,7 +38,54 @@ final class Creative_Pear_Monitor_Updater
             return $transient;
         }
 
-        $transient->response[$this->plugin_basename] = (object) [
+        if (! isset($transient->response) || ! is_array($transient->response)) {
+            $transient->response = [];
+        }
+        $transient->response[$this->plugin_basename] = $this->update_item($release);
+        if (isset($transient->no_update) && is_array($transient->no_update)) {
+            unset($transient->no_update[$this->plugin_basename]);
+        }
+
+        return $transient;
+    }
+
+    public function refresh_update_notice(): void
+    {
+        delete_site_transient(self::CACHE_KEY);
+        $release = $this->latest_release();
+        if (! $release) {
+            return;
+        }
+
+        $transient = get_site_transient('update_plugins');
+        if (! is_object($transient)) {
+            $transient = (object) [];
+        }
+        if (! isset($transient->response) || ! is_array($transient->response)) {
+            $transient->response = [];
+        }
+        if (! isset($transient->no_update) || ! is_array($transient->no_update)) {
+            $transient->no_update = [];
+        }
+
+        if (version_compare($this->current_version, $release['version'], '<')) {
+            $transient->response[$this->plugin_basename] = $this->update_item($release);
+            unset($transient->no_update[$this->plugin_basename]);
+        } else {
+            unset($transient->response[$this->plugin_basename]);
+            $transient->no_update[$this->plugin_basename] = $this->update_item([
+                'version' => $this->current_version,
+                'homepage' => 'https://github.com/'.self::REPOSITORY,
+                'package' => '',
+            ]);
+        }
+
+        set_site_transient('update_plugins', $transient);
+    }
+
+    private function update_item(array $release): object
+    {
+        return (object) [
             'id' => 'github.com/'.self::REPOSITORY,
             'slug' => self::SLUG,
             'plugin' => $this->plugin_basename,
@@ -52,8 +99,6 @@ final class Creative_Pear_Monitor_Updater
             'banners' => [],
             'autoupdate' => false,
         ];
-
-        return $transient;
     }
 
     public function plugin_information($result, string $action, $args)
