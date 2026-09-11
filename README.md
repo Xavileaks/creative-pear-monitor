@@ -8,6 +8,7 @@ Plugin de WordPress que conecta los sitios administrados por Creative Pear con s
 - Detección de administradores y cambios técnicos.
 - Señales de correo, cron, base de datos y estado de checkout.
 - Resumen local de Defender: escaneos, hallazgos, cuarentena, módulos, bloqueos e IPs enmascaradas.
+- Sesiones firmadas de tres minutos para pruebas automáticas de formularios con CAPTCHA compatible, sin desactivar plugins globalmente.
 - Envío inmediato tras cambios relevantes y pulso de respaldo cada cinco minutos.
 - Avisos de actualización cada cinco minutos desde las releases de este repositorio; la instalación es siempre manual desde WordPress.
 

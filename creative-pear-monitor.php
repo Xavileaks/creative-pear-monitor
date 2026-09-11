@@ -45,6 +45,8 @@ final class Creative_Pear_Monitor
         add_action('admin_init', [$this, 'register']);
         add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
         add_action('plugins_loaded', [$this, 'migrate_schedule']);
+        add_action('plugins_loaded', [$this, 'enable_scoped_form_test'], PHP_INT_MAX);
+        add_action('rest_api_init', [$this, 'register_form_test_route']);
         add_filter('plugin_action_links_'.plugin_basename(__FILE__), [$this, 'action_links']);
         add_filter('all_plugins', [$this, 'localize_plugin_data']);
         add_action('update_option_'.self::OPTION, [$this, 'queue_report'], 10, 2);
@@ -171,6 +173,114 @@ final class Creative_Pear_Monitor
                 'key' => sanitize_text_field($value['key'] ?? ''),
             ];
         }]);
+    }
+
+    public function register_form_test_route(): void
+    {
+        register_rest_route('creative-pear-monitor/v1', '/form-test-session', [
+            'methods' => 'POST',
+            'callback' => [$this, 'create_form_test_session'],
+            'permission_callback' => [$this, 'authorize_form_test_session'],
+        ]);
+    }
+
+    public function authorize_form_test_session(WP_REST_Request $request)
+    {
+        $settings = (array) get_option(self::OPTION, []);
+        $site_id = absint($request->get_header('X-CP-Site-ID'));
+        $timestamp = absint($request->get_header('X-CP-Timestamp'));
+        $signature = sanitize_text_field($request->get_header('X-CP-Signature'));
+
+        if (! $this->has_credentials($settings) || $site_id !== absint($settings['site_id'] ?? 0) || abs(time() - $timestamp) > 120) {
+            return new WP_Error('cp_form_test_forbidden', 'Invalid form test request.', ['status' => 403]);
+        }
+
+        $expected = hash_hmac('sha256', $site_id.'|'.$timestamp, (string) $settings['key']);
+        if (! hash_equals($expected, $signature)) {
+            return new WP_Error('cp_form_test_forbidden', 'Invalid form test signature.', ['status' => 403]);
+        }
+
+        return true;
+    }
+
+    public function create_form_test_session(): WP_REST_Response
+    {
+        try {
+            $token = bin2hex(random_bytes(32));
+        } catch (Exception $exception) {
+            $token = wp_generate_password(64, false, false);
+        }
+
+        $settings = (array) get_option(self::OPTION, []);
+        $token_hash = hash('sha256', $token);
+        set_transient('creative_pear_form_test_'.$token_hash, [
+            'token_hash' => $token_hash,
+            'site_id' => absint($settings['site_id'] ?? 0),
+            'created_at' => time(),
+        ], 3 * MINUTE_IN_SECONDS);
+
+        return new WP_REST_Response([
+            'token' => $token,
+            'expires_in' => 180,
+            'supported_frameworks' => $this->supported_form_frameworks(),
+        ], 201);
+    }
+
+    public function enable_scoped_form_test(): void
+    {
+        if (! $this->is_scoped_form_test_request()) {
+            return;
+        }
+
+        add_filter('wpforms_process_bypass_captcha', '__return_true', PHP_INT_MAX, 3);
+        add_filter('wpcf7_spam', '__return_false', PHP_INT_MAX, 1);
+        add_filter('gform_entry_is_spam', '__return_false', PHP_INT_MAX, 3);
+        add_filter('gform_field_validation', function ($result, $value, $form, $field) {
+            $type = is_object($field) ? (string) ($field->type ?? '') : '';
+            if ($type === 'captcha') {
+                $result['is_valid'] = true;
+                $result['message'] = '';
+            }
+
+            return $result;
+        }, PHP_INT_MAX, 4);
+    }
+
+    private function is_scoped_form_test_request(): bool
+    {
+        $token = sanitize_text_field(wp_unslash($_SERVER['HTTP_X_CREATIVE_PEAR_TEST'] ?? ''));
+        if ($token === '') {
+            return false;
+        }
+
+        $token_hash = hash('sha256', $token);
+        $session = get_transient('creative_pear_form_test_'.$token_hash);
+        $settings = (array) get_option(self::OPTION, []);
+
+        return is_array($session)
+            && hash_equals((string) ($session['token_hash'] ?? ''), $token_hash)
+            && absint($session['site_id'] ?? 0) === absint($settings['site_id'] ?? 0);
+    }
+
+    private function supported_form_frameworks(): array
+    {
+        $active = array_merge(
+            (array) get_option('active_plugins', []),
+            array_keys((array) get_site_option('active_sitewide_plugins', []))
+        );
+        $supported = [];
+
+        if (array_intersect($active, ['wpforms-lite/wpforms.php', 'wpforms/wpforms.php'])) {
+            $supported[] = 'wpforms';
+        }
+        if (in_array('contact-form-7/wp-contact-form-7.php', $active, true)) {
+            $supported[] = 'contact-form-7';
+        }
+        if (in_array('gravityforms/gravityforms.php', $active, true)) {
+            $supported[] = 'gravity-forms';
+        }
+
+        return $supported;
     }
 
     public function page(): void
