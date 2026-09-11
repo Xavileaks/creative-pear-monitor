@@ -235,6 +235,7 @@ final class Creative_Pear_Monitor
         add_filter('wpforms_process_bypass_captcha', '__return_true', PHP_INT_MAX, 3);
         add_filter('wpcf7_spam', '__return_false', PHP_INT_MAX, 1);
         add_filter('gform_entry_is_spam', '__return_false', PHP_INT_MAX, 3);
+        add_action('init', [$this, 'disable_scoped_elementor_captcha_validation'], PHP_INT_MAX);
         add_filter('gform_field_validation', function ($result, $value, $form, $field) {
             $type = is_object($field) ? (string) ($field->type ?? '') : '';
             if ($type === 'captcha') {
@@ -244,6 +245,15 @@ final class Creative_Pear_Monitor
 
             return $result;
         }, PHP_INT_MAX, 4);
+    }
+
+    public function disable_scoped_elementor_captcha_validation(): void
+    {
+        remove_all_actions('elementor_pro/forms/validation/recaptcha');
+        remove_all_actions('elementor_pro/forms/validation/recaptcha_v3');
+        remove_all_actions('elementor_pro/forms/validation/hcaptcha');
+        remove_all_actions('elementor_pro/forms/validation/turnstile');
+        $this->remove_captcha_callbacks('elementor_pro/forms/validation');
     }
 
     private function is_scoped_form_test_request(): bool
@@ -279,8 +289,38 @@ final class Creative_Pear_Monitor
         if (in_array('gravityforms/gravityforms.php', $active, true)) {
             $supported[] = 'gravity-forms';
         }
+        if (in_array('elementor-pro/elementor-pro.php', $active, true)) {
+            $supported[] = 'elementor-forms';
+        }
 
         return $supported;
+    }
+
+    private function remove_captcha_callbacks(string $hook): void
+    {
+        global $wp_filter;
+
+        if (empty($wp_filter[$hook]) || empty($wp_filter[$hook]->callbacks)) {
+            return;
+        }
+
+        foreach ($wp_filter[$hook]->callbacks as $priority => $callbacks) {
+            foreach ($callbacks as $callback) {
+                $function = $callback['function'] ?? null;
+                if (is_array($function)) {
+                    $owner = is_object($function[0]) ? get_class($function[0]) : (string) $function[0];
+                    $identity = $owner.'::'.(string) ($function[1] ?? '');
+                } elseif (is_string($function)) {
+                    $identity = $function;
+                } else {
+                    continue;
+                }
+
+                if (preg_match('/captcha|turnstile/i', $identity)) {
+                    remove_filter($hook, $function, $priority);
+                }
+            }
+        }
     }
 
     public function page(): void
