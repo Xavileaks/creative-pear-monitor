@@ -3,7 +3,7 @@
  * Plugin Name: Creative Pear Monitor
  * Plugin URI: https://github.com/Xavileaks/creative-pear-monitor
  * Description: Envía inventario técnico y señales de salud al centro de control de Creative Pear.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Creative Pear
  * Author URI: https://creativepearagency.com
  * Update URI: https://github.com/Xavileaks/creative-pear-monitor
@@ -17,7 +17,7 @@ require_once __DIR__.'/includes/class-creative-pear-monitor-updater.php';
 
 final class Creative_Pear_Monitor
 {
-    private const VERSION = '1.2.0';
+    private const VERSION = '1.3.0';
 
     private const OPTION = 'creative_pear_monitor_settings';
 
@@ -316,6 +316,7 @@ final class Creative_Pear_Monitor
             ];
         }
         $woo_details = $this->woocommerce_details($woocommerce);
+        $defender = $this->defender_details($plugins, $active);
         $database = $this->database_details();
         $inventory_hash = hash('sha256', wp_json_encode([$plugin_inventory, $theme_inventory, $admins]));
         $previous_hash = (string) get_option('creative_pear_monitor_inventory_hash', '');
@@ -331,6 +332,7 @@ final class Creative_Pear_Monitor
             'metadata' => [
                 'woocommerce' => $woocommerce,
                 'woocommerce_details' => $woo_details,
+                'defender' => $defender,
                 'active_plugins' => count($active),
                 'plugins' => $plugin_inventory,
                 'themes' => $theme_inventory,
@@ -415,6 +417,253 @@ final class Creative_Pear_Monitor
             'checkout_page' => function_exists('wc_get_page_permalink') ? wc_get_page_permalink('checkout') : null,
             'cart_page' => function_exists('wc_get_page_permalink') ? wc_get_page_permalink('cart') : null,
         ];
+    }
+
+    private function defender_details(array $plugins, array $active_plugins): array
+    {
+        $plugin_file = null;
+        foreach (array_keys($plugins) as $file) {
+            if (in_array($file, ['defender-security/wp-defender.php', 'wp-defender/wp-defender.php'], true)) {
+                $plugin_file = $file;
+                break;
+            }
+        }
+
+        if (! $plugin_file) {
+            return ['installed' => false, 'active' => false, 'reported_at' => gmdate('c')];
+        }
+
+        $active = in_array($plugin_file, $active_plugins, true);
+        $version = (string) ($plugins[$plugin_file]['Version'] ?? '');
+        $summary = [
+            'installed' => true,
+            'active' => $active,
+            'version' => $version ?: null,
+            'reported_at' => gmdate('c'),
+        ];
+
+        if (! $active) {
+            return $summary;
+        }
+
+        global $wpdb;
+        $scan_table = $wpdb->base_prefix.'defender_scan';
+        $items_table = $wpdb->base_prefix.'defender_scan_item';
+        $lockout_table = $wpdb->base_prefix.'defender_lockout';
+        $log_table = $wpdb->base_prefix.'defender_lockout_log';
+        $quarantine_table = $wpdb->base_prefix.'defender_quarantine';
+
+        $scan = null;
+        if ($this->defender_table_exists($scan_table)) {
+            $scan = $wpdb->get_row("SELECT id, status, date_start, date_end FROM {$scan_table} ORDER BY id DESC LIMIT 1", ARRAY_A);
+        }
+
+        $scan_counts = [];
+        if ($scan && $this->defender_table_exists($items_table)) {
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT type, status, COUNT(*) AS total FROM {$items_table} WHERE parent_id = %d GROUP BY type, status",
+                (int) $scan['id']
+            ), ARRAY_A);
+            foreach ((array) $rows as $row) {
+                $scan_counts[$row['status']][$row['type']] = (int) $row['total'];
+            }
+        }
+
+        $active_findings = (array) ($scan_counts['active'] ?? []);
+        $ignored_findings = (array) ($scan_counts['ignore'] ?? []);
+        $summary['scan'] = [
+            'status' => $scan['status'] ?? 'never',
+            'started_at' => $this->defender_mysql_date($scan['date_start'] ?? null),
+            'completed_at' => $this->defender_mysql_date($scan['date_end'] ?? null),
+            'findings' => array_sum($active_findings),
+            'malware' => (int) ($active_findings['malware'] ?? 0),
+            'vulnerabilities' => (int) ($active_findings['vulnerability'] ?? 0),
+            'integrity' => (int) (($active_findings['core_integrity'] ?? 0) + ($active_findings['plugin_integrity'] ?? 0)),
+            'abandoned' => (int) (($active_findings['plugin_closed'] ?? 0) + ($active_findings['plugin_outdated'] ?? 0)),
+            'ignored' => array_sum($ignored_findings),
+        ];
+
+        $summary['quarantine'] = $this->defender_table_exists($quarantine_table)
+            ? (int) $wpdb->get_var("SELECT COUNT(*) FROM {$quarantine_table}")
+            : 0;
+        $summary['firewall'] = $this->defender_firewall_details($lockout_table, $log_table);
+        $summary['modules'] = $this->defender_modules();
+        $summary['recommendations'] = $this->defender_recommendations();
+
+        return $summary;
+    }
+
+    private function defender_firewall_details(string $lockout_table, string $log_table): array
+    {
+        global $wpdb;
+        $now = time();
+        $firewall_settings = $this->defender_option('wd_lockdown_settings');
+        $details = [
+            'blocked_now' => 0,
+            'blocks_24h' => 0,
+            'blocks_7d' => 0,
+            'blocks_30d' => 0,
+            'failed_logins_24h' => 0,
+            'failed_logins_7d' => 0,
+            'failed_logins_30d' => 0,
+            'reasons' => ['login' => 0, 'not_found' => 0, 'bot' => 0, 'blacklist' => 0],
+            'recent_blocks' => [],
+            'retention_days' => max(1, min(90, (int) ($firewall_settings['storage_days'] ?? 30))),
+            'spike' => false,
+        ];
+
+        if ($this->defender_table_exists($lockout_table)) {
+            $details['blocked_now'] = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$lockout_table} WHERE status = %s AND (release_time = 0 OR release_time > %d)",
+                'blocked',
+                $now
+            ));
+        }
+
+        if (! $this->defender_table_exists($log_table)) {
+            return $details;
+        }
+
+        $types = ['auth_lock', '404_lockout', 'xss_lockout', 'plugin_lockout', 'theme_lockout', 'malicious_bot', 'fake_bot', 'ua_lockout', 'custom_lockout'];
+        $placeholders = implode(', ', array_fill(0, count($types), '%s'));
+        $periods = $wpdb->get_row($wpdb->prepare(
+            "SELECT SUM(date >= %d) AS day_count, SUM(date >= %d) AS week_count, COUNT(*) AS month_count FROM {$log_table} WHERE date >= %d AND type IN ({$placeholders})",
+            ...array_merge([$now - DAY_IN_SECONDS, $now - WEEK_IN_SECONDS, $now - (30 * DAY_IN_SECONDS)], $types)
+        ), ARRAY_A);
+        $details['blocks_24h'] = (int) ($periods['day_count'] ?? 0);
+        $details['blocks_7d'] = (int) ($periods['week_count'] ?? 0);
+        $details['blocks_30d'] = (int) ($periods['month_count'] ?? 0);
+
+        $failed = $wpdb->get_row($wpdb->prepare(
+            "SELECT SUM(date >= %d) AS day_count, SUM(date >= %d) AS week_count, COUNT(*) AS month_count FROM {$log_table} WHERE date >= %d AND type = %s",
+            $now - DAY_IN_SECONDS,
+            $now - WEEK_IN_SECONDS,
+            $now - (30 * DAY_IN_SECONDS),
+            'auth_fail'
+        ), ARRAY_A);
+        $details['failed_logins_24h'] = (int) ($failed['day_count'] ?? 0);
+        $details['failed_logins_7d'] = (int) ($failed['week_count'] ?? 0);
+        $details['failed_logins_30d'] = (int) ($failed['month_count'] ?? 0);
+
+        $reason_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT type, COUNT(*) AS total FROM {$log_table} WHERE date >= %d AND type IN ({$placeholders}) GROUP BY type",
+            ...array_merge([$now - (30 * DAY_IN_SECONDS)], $types)
+        ), ARRAY_A);
+        foreach ((array) $reason_rows as $row) {
+            $reason = $this->defender_lockout_reason((string) $row['type']);
+            $details['reasons'][$reason] += (int) $row['total'];
+        }
+
+        $recent = $wpdb->get_results($wpdb->prepare(
+            "SELECT ip, type, date, country_iso_code FROM {$log_table} WHERE type IN ({$placeholders}) ORDER BY date DESC LIMIT 12",
+            ...$types
+        ), ARRAY_A);
+        foreach ((array) $recent as $row) {
+            $details['recent_blocks'][] = [
+                'ip' => $this->mask_ip((string) $row['ip']),
+                'reason' => $this->defender_lockout_reason((string) $row['type']),
+                'occurred_at' => gmdate('c', (int) $row['date']),
+                'country' => preg_match('/^[A-Z]{2}$/', (string) $row['country_iso_code']) ? $row['country_iso_code'] : null,
+            ];
+        }
+
+        $daily_baseline = (int) ceil($details['blocks_7d'] / 7);
+        $details['spike'] = $details['blocks_24h'] >= max(50, $daily_baseline * 3);
+
+        return $details;
+    }
+
+    private function defender_modules(): array
+    {
+        $scan = $this->defender_option('wd_scan_settings');
+        $login = $this->defender_option('wd_login_lockout_settings');
+        $not_found = $this->defender_option('wd_notfound_lockout_settings');
+        $two_factor = $this->defender_option('wd_2auth_settings');
+        $audit = $this->defender_option('wd_audit_settings');
+        $mask_login = $this->defender_option('wd_masking_login_settings');
+
+        return [
+            'file_integrity' => ! empty($scan['integrity_check']),
+            'malware_scan' => ! empty($scan['scan_malware']),
+            'vulnerability_scan' => ! empty($scan['check_known_vuln']),
+            'login_protection' => ! empty($login['enabled']),
+            'not_found_protection' => ! empty($not_found['enabled']),
+            'two_factor' => ! empty($two_factor['enabled']),
+            'audit_log' => ! empty($audit['enabled']),
+            'mask_login' => ! empty($mask_login['enabled']),
+        ];
+    }
+
+    private function defender_recommendations(): array
+    {
+        $hardener = $this->defender_option('hardener_settings');
+
+        return [
+            'pending' => count((array) ($hardener['issues'] ?? [])),
+            'fixed' => count((array) ($hardener['fixed'] ?? [])),
+            'ignored' => count((array) ($hardener['ignore'] ?? [])),
+        ];
+    }
+
+    private function defender_option(string $name): array
+    {
+        $value = get_option($name, []);
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            $value = is_array($decoded) ? $decoded : [];
+        }
+
+        return is_array($value) ? $value : [];
+    }
+
+    private function defender_table_exists(string $table): bool
+    {
+        global $wpdb;
+
+        return $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table))) === $table;
+    }
+
+    private function defender_mysql_date(?string $date): ?string
+    {
+        if (! $date || $date === '0000-00-00 00:00:00') {
+            return null;
+        }
+
+        $timestamp = strtotime($date.' UTC');
+
+        return $timestamp ? gmdate('c', $timestamp) : null;
+    }
+
+    private function defender_lockout_reason(string $type): string
+    {
+        if ($type === 'auth_lock') {
+            return 'login';
+        }
+        if (in_array($type, ['404_lockout', 'xss_lockout', 'plugin_lockout', 'theme_lockout'], true)) {
+            return 'not_found';
+        }
+        if (in_array($type, ['malicious_bot', 'fake_bot', 'ua_lockout'], true)) {
+            return 'bot';
+        }
+
+        return 'blacklist';
+    }
+
+    private function mask_ip(string $ip): string
+    {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $parts = explode('.', $ip);
+            $parts[3] = 'xxx';
+
+            return implode('.', $parts);
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $parts = array_slice(explode(':', $ip), 0, 3);
+
+            return implode(':', $parts).'::xxxx';
+        }
+
+        return 'oculta';
     }
 
     private function database_details(): array
