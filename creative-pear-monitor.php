@@ -235,6 +235,7 @@ final class Creative_Pear_Monitor
         add_filter('wpforms_process_bypass_captcha', '__return_true', PHP_INT_MAX, 3);
         add_filter('wpcf7_spam', '__return_false', PHP_INT_MAX, 1);
         add_filter('gform_entry_is_spam', '__return_false', PHP_INT_MAX, 3);
+        add_filter('hcap_protect_form', '__return_false', PHP_INT_MAX, 3);
         add_action('init', [$this, 'disable_scoped_elementor_captcha_validation'], PHP_INT_MAX);
         add_filter('gform_field_validation', function ($result, $value, $form, $field) {
             $type = is_object($field) ? (string) ($field->type ?? '') : '';
