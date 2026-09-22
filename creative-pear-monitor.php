@@ -3,7 +3,7 @@
  * Plugin Name: Creative Pear Monitor
  * Plugin URI: https://github.com/Xavileaks/creative-pear-monitor
  * Description: Envía inventario técnico y señales de salud al centro de control de Creative Pear.
- * Version: 1.3.0
+ * Version: 1.4.0
  * Author: Creative Pear
  * Author URI: https://creativepearagency.com
  * Update URI: https://github.com/Xavileaks/creative-pear-monitor
@@ -17,7 +17,7 @@ require_once __DIR__.'/includes/class-creative-pear-monitor-updater.php';
 
 final class Creative_Pear_Monitor
 {
-    private const VERSION = '1.3.0';
+    private const VERSION = '1.4.0';
 
     private const OPTION = 'creative_pear_monitor_settings';
 
@@ -561,13 +561,127 @@ final class Creative_Pear_Monitor
 
         return [
             'active' => true,
+            'version' => defined('WC_VERSION') ? WC_VERSION : null,
             'sandbox' => count(array_filter($gateways, fn ($gateway) => $gateway['enabled'] && $gateway['test_mode'])) > 0,
             'gateways' => $gateways,
             'products' => function_exists('wp_count_posts') ? (int) (wp_count_posts('product')->publish ?? 0) : null,
             'failed_orders' => function_exists('wc_orders_count') ? (int) wc_orders_count('wc-failed') : null,
             'checkout_page' => function_exists('wc_get_page_permalink') ? wc_get_page_permalink('checkout') : null,
             'cart_page' => function_exists('wc_get_page_permalink') ? wc_get_page_permalink('cart') : null,
+            'sales_30d' => $this->woocommerce_sales_snapshot(),
         ];
+    }
+
+    private function woocommerce_sales_snapshot(): array
+    {
+        $cached = get_transient('creative_pear_monitor_woocommerce_sales_30d');
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        global $wpdb;
+
+        $order_stats_table = $wpdb->prefix.'wc_order_stats';
+        $product_lookup_table = $wpdb->prefix.'wc_order_product_lookup';
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $order_stats_table)) !== $order_stats_table) {
+            return [];
+        }
+
+        $since_timestamp = time() - (30 * DAY_IN_SECONDS);
+        $since = gmdate('Y-m-d H:i:s', $since_timestamp);
+        $paid_status_slugs = function_exists('wc_get_is_paid_statuses') ? wc_get_is_paid_statuses() : ['processing', 'completed'];
+        if (! $paid_status_slugs) {
+            $paid_status_slugs = ['processing', 'completed'];
+        }
+        $paid_statuses = array_values(array_unique(array_map(function ($status) {
+            $status = (string) $status;
+
+            return strpos($status, 'wc-') === 0 ? $status : 'wc-'.$status;
+        }, $paid_status_slugs)));
+        $status_placeholders = implode(', ', array_fill(0, count($paid_statuses), '%s'));
+
+        $summary = $wpdb->get_row($wpdb->prepare(
+            "SELECT COUNT(order_id) AS orders, COALESCE(SUM(net_total), 0) AS net_sales
+             FROM {$order_stats_table}
+             WHERE parent_id = 0 AND date_created_gmt >= %s AND status IN ({$status_placeholders})",
+            array_merge([$since], $paid_statuses)
+        ), ARRAY_A);
+
+        $failed_orders = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(order_id) FROM {$order_stats_table}
+             WHERE parent_id = 0 AND date_created_gmt >= %s AND status = %s",
+            $since,
+            'wc-failed'
+        ));
+
+        $top_product = null;
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $product_lookup_table)) === $product_lookup_table) {
+            $top_product_row = $wpdb->get_row($wpdb->prepare(
+                "SELECT products.product_id, SUM(products.product_qty) AS quantity
+                 FROM {$product_lookup_table} products
+                 INNER JOIN {$order_stats_table} orders ON orders.order_id = products.order_id
+                 WHERE orders.parent_id = 0 AND orders.date_created_gmt >= %s AND orders.status IN ({$status_placeholders})
+                 GROUP BY products.product_id
+                 ORDER BY quantity DESC
+                 LIMIT 1",
+                array_merge([$since], $paid_statuses)
+            ), ARRAY_A);
+            if ($top_product_row) {
+                $product = function_exists('wc_get_product') ? wc_get_product((int) $top_product_row['product_id']) : null;
+                $top_product = [
+                    'name' => $product ? wp_strip_all_tags($product->get_name()) : sprintf('Producto #%d', (int) $top_product_row['product_id']),
+                    'quantity' => (int) $top_product_row['quantity'],
+                ];
+            }
+        }
+
+        $gateway_usage = [];
+        if (function_exists('wc_get_orders')) {
+            $recent_order_ids = wc_get_orders([
+                'limit' => 100,
+                'return' => 'ids',
+                'status' => $paid_status_slugs,
+                'date_created' => '>='.$since_timestamp,
+                'orderby' => 'date',
+                'order' => 'DESC',
+            ]);
+            foreach ($recent_order_ids as $order_id) {
+                $order = wc_get_order($order_id);
+                if (! $order) {
+                    continue;
+                }
+                $gateway_id = (string) $order->get_payment_method();
+                if ($gateway_id === '') {
+                    continue;
+                }
+                if (! isset($gateway_usage[$gateway_id])) {
+                    $gateway_usage[$gateway_id] = [
+                        'id' => $gateway_id,
+                        'title' => wp_strip_all_tags($order->get_payment_method_title() ?: $gateway_id),
+                        'orders' => 0,
+                    ];
+                }
+                $gateway_usage[$gateway_id]['orders']++;
+            }
+        }
+        usort($gateway_usage, fn ($left, $right) => $right['orders'] <=> $left['orders']);
+
+        $orders = (int) ($summary['orders'] ?? 0);
+        $net_sales = round((float) ($summary['net_sales'] ?? 0), 2);
+        $snapshot = [
+            'period_days' => 30,
+            'orders' => $orders,
+            'net_sales' => $net_sales,
+            'average_order_value' => $orders > 0 ? round($net_sales / $orders, 2) : 0,
+            'failed_orders' => $failed_orders,
+            'currency' => function_exists('get_woocommerce_currency') ? get_woocommerce_currency() : null,
+            'top_product' => $top_product,
+            'primary_gateway' => $gateway_usage[0] ?? null,
+            'reported_at' => gmdate('c'),
+        ];
+        set_transient('creative_pear_monitor_woocommerce_sales_30d', $snapshot, 10 * MINUTE_IN_SECONDS);
+
+        return $snapshot;
     }
 
     private function defender_details(array $plugins, array $active_plugins): array

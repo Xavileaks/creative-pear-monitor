@@ -5,6 +5,7 @@ Plugin de WordPress que conecta los sitios administrados por Creative Pear con s
 ## Funciones
 
 - Inventario de WordPress, PHP, plugins, temas, Elementor y WooCommerce.
+- Resumen agregado de WooCommerce de los últimos 30 días: pedidos, ventas netas, ticket medio, fallos, pasarela principal y producto más vendido, sin datos de clientes.
 - Detección de administradores y cambios técnicos.
 - Señales de correo, cron, base de datos y estado de checkout.
 - Resumen local de Defender: escaneos, hallazgos, cuarentena, módulos, bloqueos e IPs enmascaradas.

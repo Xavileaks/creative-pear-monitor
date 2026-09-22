@@ -2,11 +2,11 @@
 Contributors: creativepear
 Requires at least: 6.2
 Requires PHP: 7.4
-Stable tag: 1.3.0
+Stable tag: 1.4.0
 
 Conector para clientes administrados por Creative Pear.
 
-Versión 1.3.0: integración local con Defender para reportar escaneos, malware, cuarentena, protección, bloqueos e IPs enmascaradas sin compartir claves.
+Versión 1.4.0: añade estadísticas privadas y agregadas de WooCommerce para el panel, incluidos pedidos, ventas, ticket medio, pasarela principal y producto más vendido, sin enviar datos de clientes.
 
 == Instalación ==
 1. Instala el ZIP desde Plugins > Añadir plugin > Subir plugin.
