@@ -2,9 +2,11 @@
 Contributors: creativepear
 Requires at least: 6.2
 Requires PHP: 7.4
-Stable tag: 1.4.0
+Stable tag: 1.5.0
 
 Conector para clientes administrados por Creative Pear.
+
+Versión 1.5.0: permite actualizar Creative Pear Monitor desde Creative Pear Status mediante una orden firmada para cada sitio. La acción solo actualiza este agente.
 
 Versión 1.4.0: añade estadísticas privadas y agregadas de WooCommerce para el panel, incluidos pedidos, ventas, ticket medio, pasarela principal y producto más vendido, sin enviar datos de clientes.
 
@@ -18,4 +20,4 @@ Versión 1.4.0: añade estadísticas privadas y agregadas de WooCommerce para el
 El plugin reporta versiones, actualizaciones pendientes, administradores, PHP, presencia de formularios, estado reciente de wp_mail, configuración básica de WooCommerce y un resumen local de Defender. También puede autorizar una sesión firmada de tres minutos para que Creative Pear pruebe un formulario con CAPTCHA compatible, incluido hCaptcha para Elementor, sin desactivar el plugin de seguridad para otros visitantes. No envía contraseñas, claves de WPMU DEV, contenido de usuarios ni direcciones IP completas.
 
 == Actualizaciones ==
-Las nuevas versiones publicadas en GitHub se comprueban cada cinco minutos y aparecen en la pantalla de plugins de WordPress. La instalación solo se realiza cuando un administrador pulsa «Actualizar ahora». El antiguo intervalo de 15 minutos para los reportes se elimina al actualizar y se sustituye por eventos inmediatos más un pulso de respaldo cada cinco minutos.
+Las nuevas versiones publicadas en GitHub se comprueban cada cinco minutos y aparecen en la pantalla de plugins de WordPress. Desde la versión 1.5.0 también se pueden instalar mediante una orden firmada desde Creative Pear Status. Las instalaciones anteriores requieren actualizar el plugin manualmente una vez. El antiguo intervalo de 15 minutos para los reportes se elimina al actualizar y se sustituye por eventos inmediatos más un pulso de respaldo cada cinco minutos.

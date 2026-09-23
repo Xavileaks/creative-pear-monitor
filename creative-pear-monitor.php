@@ -3,7 +3,7 @@
  * Plugin Name: Creative Pear Monitor
  * Plugin URI: https://github.com/Xavileaks/creative-pear-monitor
  * Description: Envía inventario técnico y señales de salud al centro de control de Creative Pear.
- * Version: 1.4.0
+ * Version: 1.5.0
  * Author: Creative Pear
  * Author URI: https://creativepearagency.com
  * Update URI: https://github.com/Xavileaks/creative-pear-monitor
@@ -17,7 +17,7 @@ require_once __DIR__.'/includes/class-creative-pear-monitor-updater.php';
 
 final class Creative_Pear_Monitor
 {
-    private const VERSION = '1.4.0';
+    private const VERSION = '1.5.0';
 
     private const OPTION = 'creative_pear_monitor_settings';
 
@@ -30,6 +30,8 @@ final class Creative_Pear_Monitor
     private const LEGACY_UPDATE_EVENT = 'creative_pear_monitor_update';
 
     private const CONNECTION_HASH_OPTION = 'creative_pear_monitor_connection_hash';
+
+    private const UPDATE_LOCK_OPTION = 'creative_pear_monitor_update_lock';
 
     private bool $report_queued = false;
 
@@ -47,6 +49,7 @@ final class Creative_Pear_Monitor
         add_action('plugins_loaded', [$this, 'migrate_schedule']);
         add_action('plugins_loaded', [$this, 'enable_scoped_form_test'], PHP_INT_MAX);
         add_action('rest_api_init', [$this, 'register_form_test_route']);
+        add_action('rest_api_init', [$this, 'register_update_route']);
         add_filter('plugin_action_links_'.plugin_basename(__FILE__), [$this, 'action_links']);
         add_filter('all_plugins', [$this, 'localize_plugin_data']);
         add_action('update_option_'.self::OPTION, [$this, 'queue_report'], 10, 2);
@@ -224,6 +227,120 @@ final class Creative_Pear_Monitor
             'expires_in' => 180,
             'supported_frameworks' => $this->supported_form_frameworks(),
         ], 201);
+    }
+
+    public function register_update_route(): void
+    {
+        register_rest_route('creative-pear-monitor/v1', '/update', [
+            'methods' => 'POST',
+            'callback' => [$this, 'update_plugin'],
+            'permission_callback' => [$this, 'authorize_update_request'],
+        ]);
+    }
+
+    public function authorize_update_request(WP_REST_Request $request)
+    {
+        $settings = (array) get_option(self::OPTION, []);
+        $site_id = absint($request->get_header('X-CP-Site-ID'));
+        $timestamp = absint($request->get_header('X-CP-Timestamp'));
+        $request_id = sanitize_text_field($request->get_header('X-CP-Request-ID'));
+        $signature = sanitize_text_field($request->get_header('X-CP-Signature'));
+
+        if (
+            ! $this->has_credentials($settings)
+            || $site_id !== absint($settings['site_id'] ?? 0)
+            || abs(time() - $timestamp) > 120
+            || ! preg_match('/^[a-f0-9-]{36}$/i', $request_id)
+        ) {
+            return new WP_Error('cp_update_forbidden', 'Invalid plugin update request.', ['status' => 403]);
+        }
+
+        $expected = hash_hmac('sha256', $site_id.'|'.$timestamp.'|'.$request_id.'|update-agent', (string) $settings['key']);
+        if (! hash_equals($expected, $signature)) {
+            return new WP_Error('cp_update_forbidden', 'Invalid plugin update signature.', ['status' => 403]);
+        }
+
+        $request_key = 'creative_pear_update_request_'.hash('sha256', $request_id);
+        if (get_transient($request_key)) {
+            return new WP_Error('cp_update_replayed', 'Plugin update request already used.', ['status' => 409]);
+        }
+        set_transient($request_key, 1, 3 * MINUTE_IN_SECONDS);
+
+        return true;
+    }
+
+    public function update_plugin(): WP_REST_Response
+    {
+        $lock_time = absint(get_option(self::UPDATE_LOCK_OPTION, 0));
+        if ($lock_time && time() - $lock_time >= 5 * MINUTE_IN_SECONDS) {
+            delete_option(self::UPDATE_LOCK_OPTION);
+        }
+        if (! add_option(self::UPDATE_LOCK_OPTION, time(), '', false)) {
+            return new WP_REST_Response([
+                'status' => 'busy',
+                'version' => self::VERSION,
+                'message' => $this->text('Ya hay una actualización del agente en curso.', 'An agent update is already running.'),
+            ], 409);
+        }
+
+        try {
+            if (! $this->updater->refresh_update_notice()) {
+                return new WP_REST_Response([
+                    'status' => 'failed',
+                    'version' => self::VERSION,
+                    'message' => $this->text('No se pudo consultar la última versión publicada.', 'The latest published version could not be checked.'),
+                ], 502);
+            }
+
+            $plugin = plugin_basename(__FILE__);
+            $updates = get_site_transient('update_plugins');
+            if (! is_object($updates) || empty($updates->response[$plugin])) {
+                return new WP_REST_Response([
+                    'status' => 'current',
+                    'version' => self::VERSION,
+                    'message' => $this->text('El agente ya está actualizado.', 'The agent is already up to date.'),
+                ]);
+            }
+
+            require_once ABSPATH.'wp-admin/includes/class-wp-upgrader.php';
+            require_once ABSPATH.'wp-admin/includes/plugin.php';
+
+            $skin = new Automatic_Upgrader_Skin;
+            $upgrader = new Plugin_Upgrader($skin);
+            $result = $upgrader->upgrade($plugin, ['clear_update_cache' => true]);
+
+            if (is_wp_error($result)) {
+                return new WP_REST_Response([
+                    'status' => 'failed',
+                    'version' => self::VERSION,
+                    'message' => $result->get_error_message(),
+                ], 502);
+            }
+
+            if ($result !== true) {
+                $errors = $skin->get_errors();
+
+                return new WP_REST_Response([
+                    'status' => 'failed',
+                    'version' => self::VERSION,
+                    'message' => is_wp_error($errors) && $errors->has_errors()
+                        ? $errors->get_error_message()
+                        : $this->text('WordPress no pudo reemplazar los archivos del agente.', 'WordPress could not replace the agent files.'),
+                ], 502);
+            }
+
+            wp_clean_plugins_cache(true);
+            $plugin_data = get_plugin_data(__FILE__, false, false);
+            $version = sanitize_text_field($plugin_data['Version'] ?? self::VERSION);
+
+            return new WP_REST_Response([
+                'status' => 'updated',
+                'version' => $version,
+                'message' => $this->text('Creative Pear Monitor se actualizó correctamente.', 'Creative Pear Monitor was updated successfully.'),
+            ]);
+        } finally {
+            delete_option(self::UPDATE_LOCK_OPTION);
+        }
     }
 
     public function enable_scoped_form_test(): void
@@ -481,6 +598,7 @@ final class Creative_Pear_Monitor
             'forms_status' => $forms, 'smtp_status' => $mail['status'], 'analytics_status' => 'unknown',
             'checkout_status' => $checkout, 'admins' => $admins,
             'metadata' => [
+                'agent' => ['version' => self::VERSION, 'remote_update' => true],
                 'woocommerce' => $woocommerce,
                 'woocommerce_details' => $woo_details,
                 'defender' => $defender,

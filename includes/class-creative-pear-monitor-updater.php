@@ -49,12 +49,12 @@ final class Creative_Pear_Monitor_Updater
         return $transient;
     }
 
-    public function refresh_update_notice(): void
+    public function refresh_update_notice(): bool
     {
         delete_site_transient(self::CACHE_KEY);
         $release = $this->latest_release();
         if (! $release) {
-            return;
+            return false;
         }
 
         $transient = get_site_transient('update_plugins');
@@ -81,6 +81,8 @@ final class Creative_Pear_Monitor_Updater
         }
 
         set_site_transient('update_plugins', $transient);
+
+        return true;
     }
 
     private function update_item(array $release): object
