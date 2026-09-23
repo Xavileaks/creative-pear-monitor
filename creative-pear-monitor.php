@@ -3,7 +3,7 @@
  * Plugin Name: Creative Pear Monitor
  * Plugin URI: https://github.com/Xavileaks/creative-pear-monitor
  * Description: Envía inventario técnico y señales de salud al centro de control de Creative Pear.
- * Version: 1.5.0
+ * Version: 1.6.0
  * Author: Creative Pear
  * Author URI: https://creativepearagency.com
  * Update URI: https://github.com/Xavileaks/creative-pear-monitor
@@ -17,7 +17,7 @@ require_once __DIR__.'/includes/class-creative-pear-monitor-updater.php';
 
 final class Creative_Pear_Monitor
 {
-    private const VERSION = '1.5.0';
+    private const VERSION = '1.6.0';
 
     private const OPTION = 'creative_pear_monitor_settings';
 
@@ -599,6 +599,7 @@ final class Creative_Pear_Monitor
             'checkout_status' => $checkout, 'admins' => $admins,
             'metadata' => [
                 'agent' => ['version' => self::VERSION, 'remote_update' => true],
+                'wordpress_login_url' => $this->wordpress_login_url($active),
                 'woocommerce' => $woocommerce,
                 'woocommerce_details' => $woo_details,
                 'defender' => $defender,
@@ -800,6 +801,37 @@ final class Creative_Pear_Monitor
         set_transient('creative_pear_monitor_woocommerce_sales_30d', $snapshot, 10 * MINUTE_IN_SECONDS);
 
         return $snapshot;
+    }
+
+    private function wordpress_login_url(array $active_plugins): ?string
+    {
+        $defender_active = (bool) array_intersect($active_plugins, [
+            'defender-security/wp-defender.php',
+            'wp-defender/wp-defender.php',
+        ]);
+
+        if ($defender_active) {
+            $settings = is_multisite()
+                ? get_site_option('wd_masking_login_settings', [])
+                : get_option('wd_masking_login_settings', []);
+            if ((! is_array($settings) || $settings === []) && is_multisite()) {
+                $settings = get_option('wd_masking_login_settings', []);
+            }
+
+            if (is_array($settings) && ! empty($settings['enabled'])) {
+                $slug = trim((string) ($settings['mask_url'] ?? $settings['maskUrl'] ?? ''), '/\\');
+
+                if ($slug !== '' && preg_match('/^[a-zA-Z0-9._~-]+(?:\/[a-zA-Z0-9._~-]+)*$/D', $slug)) {
+                    $path = get_option('permalink_structure') ? $slug : '?'.$slug;
+
+                    return untrailingslashit(site_url()).'/'.$path;
+                }
+
+                return null;
+            }
+        }
+
+        return wp_login_url();
     }
 
     private function defender_details(array $plugins, array $active_plugins): array

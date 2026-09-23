@@ -9,6 +9,7 @@ Plugin de WordPress que conecta los sitios administrados por Creative Pear con s
 - Detección de administradores y cambios técnicos.
 - Señales de correo, cron, base de datos y estado de checkout.
 - Resumen local de Defender: escaneos, hallazgos, cuarentena, módulos, bloqueos e IPs enmascaradas.
+- URL real de acceso a WordPress para el panel privado, incluida la máscara de Defender cuando esté activa.
 - Sesiones firmadas de tres minutos para pruebas automáticas de formularios con CAPTCHA compatible, incluido hCaptcha para Elementor, sin desactivar plugins globalmente.
 - Envío inmediato tras cambios relevantes y pulso de respaldo cada cinco minutos.
 - Avisos de actualización cada cinco minutos desde las releases de este repositorio y actualización remota firmada desde Creative Pear Status.
@@ -22,4 +23,4 @@ Plugin de WordPress que conecta los sitios administrados por Creative Pear con s
 
 La actualización remota solo puede reemplazar Creative Pear Monitor. Las instalaciones anteriores a la versión 1.5.0 necesitan actualizarse manualmente una vez; las siguientes versiones podrán instalarse desde el panel.
 
-El plugin no incluye claves ni contraseñas en el repositorio y nunca envía contenido privado de WordPress, claves de WPMU DEV ni direcciones IP completas.
+El plugin no incluye claves ni contraseñas en el repositorio. Envía la URL de acceso a WordPress al panel privado, incluida la máscara de Defender si está activa; no envía claves de WPMU DEV, contraseñas ni direcciones IP completas.
