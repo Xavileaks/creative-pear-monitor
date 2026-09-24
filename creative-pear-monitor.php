@@ -634,7 +634,11 @@ final class Creative_Pear_Monitor
             'forms_status' => $forms, 'smtp_status' => $mail['status'], 'analytics_status' => 'unknown',
             'checkout_status' => $checkout, 'admins' => $admins,
             'metadata' => [
-                'agent' => ['version' => self::VERSION, 'remote_update' => true],
+                'agent' => [
+                    'version' => get_file_data(__FILE__, ['Version' => 'Version'])['Version'] ?: self::VERSION,
+                    'remote_update' => true,
+                    'update_protocol' => 2,
+                ],
                 'wordpress_login_url' => $this->wordpress_login_url($active),
                 'woocommerce' => $woocommerce,
                 'woocommerce_details' => $woo_details,

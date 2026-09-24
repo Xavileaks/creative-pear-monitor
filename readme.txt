@@ -8,6 +8,8 @@ Conector para clientes administrados por Creative Pear.
 
 La actualización remota segura conserva la activación del agente tras reemplazar sus archivos y permite que Creative Pear Status compruebe la compatibilidad antes de enviar una orden de actualización. Las versiones anteriores necesitan una instalación manual de transición.
 
+El reporte del agente utiliza la versión instalada en disco para evitar mostrar temporalmente la versión anterior después de una actualización remota.
+
 Versión 1.6.0: informa al panel privado de la URL real de acceso a WordPress, incluida la máscara de Defender cuando está activa.
 
 Versión 1.5.0: permite actualizar Creative Pear Monitor desde Creative Pear Status mediante una orden firmada para cada sitio. La acción solo actualiza este agente.
