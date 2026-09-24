@@ -231,10 +231,23 @@ final class Creative_Pear_Monitor
 
     public function register_update_route(): void
     {
+        register_rest_route('creative-pear-monitor/v1', '/update-capability', [
+            'methods' => 'GET',
+            'callback' => [$this, 'update_capability'],
+            'permission_callback' => '__return_true',
+        ]);
         register_rest_route('creative-pear-monitor/v1', '/update', [
             'methods' => 'POST',
             'callback' => [$this, 'update_plugin'],
             'permission_callback' => [$this, 'authorize_update_request'],
+        ]);
+    }
+
+    public function update_capability(): WP_REST_Response
+    {
+        return new WP_REST_Response([
+            'version' => self::VERSION,
+            'protocol' => 2,
         ]);
     }
 
@@ -305,9 +318,25 @@ final class Creative_Pear_Monitor
             require_once ABSPATH.'wp-admin/includes/class-wp-upgrader.php';
             require_once ABSPATH.'wp-admin/includes/plugin.php';
 
+            $was_active = is_plugin_active($plugin);
+            $network_wide = is_multisite() && is_plugin_active_for_network($plugin);
             $skin = new Automatic_Upgrader_Skin;
             $upgrader = new Plugin_Upgrader($skin);
             $result = $upgrader->upgrade($plugin, ['clear_update_cache' => true]);
+
+            wp_clean_plugins_cache(true);
+            if ($was_active && ! is_plugin_active($plugin)) {
+                $activation = activate_plugin($plugin, '', $network_wide, true);
+                if (is_wp_error($activation) || ! is_plugin_active($plugin)) {
+                    return new WP_REST_Response([
+                        'status' => 'failed',
+                        'version' => self::VERSION,
+                        'message' => is_wp_error($activation)
+                            ? $activation->get_error_message()
+                            : $this->text('El agente se actualizó, pero WordPress no pudo reactivarlo.', 'The agent was updated, but WordPress could not reactivate it.'),
+                    ], 502);
+                }
+            }
 
             if (is_wp_error($result)) {
                 return new WP_REST_Response([
@@ -329,9 +358,16 @@ final class Creative_Pear_Monitor
                 ], 502);
             }
 
-            wp_clean_plugins_cache(true);
             $plugin_data = get_plugin_data(__FILE__, false, false);
             $version = sanitize_text_field($plugin_data['Version'] ?? self::VERSION);
+
+            if (! version_compare($version, self::VERSION, '>')) {
+                return new WP_REST_Response([
+                    'status' => 'failed',
+                    'version' => $version,
+                    'message' => $this->text('WordPress no instaló una versión más reciente del agente.', 'WordPress did not install a newer agent version.'),
+                ], 502);
+            }
 
             return new WP_REST_Response([
                 'status' => 'updated',

@@ -34,7 +34,14 @@ final class Creative_Pear_Monitor_Updater
         }
 
         $release = $this->latest_release();
-        if (! $release || ! version_compare($this->current_version, $release['version'], '<')) {
+        if (! $release) {
+            return $transient;
+        }
+        if (! version_compare($this->current_version, $release['version'], '<')) {
+            if (isset($transient->response[$this->plugin_basename])) {
+                unset($transient->response[$this->plugin_basename]);
+            }
+
             return $transient;
         }
 
