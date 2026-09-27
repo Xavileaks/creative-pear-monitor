@@ -47,8 +47,7 @@ final class Creative_Pear_Monitor
         add_action('admin_init', [$this, 'register']);
         add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
         add_action('plugins_loaded', [$this, 'migrate_schedule']);
-        add_action('plugins_loaded', [$this, 'enable_scoped_form_test'], PHP_INT_MAX);
-        add_action('rest_api_init', [$this, 'register_form_test_route']);
+        add_action('rest_api_init', [$this, 'register_form_activity_route']);
         add_action('rest_api_init', [$this, 'register_update_route']);
         add_filter('plugin_action_links_'.plugin_basename(__FILE__), [$this, 'action_links']);
         add_filter('all_plugins', [$this, 'localize_plugin_data']);
@@ -254,6 +253,70 @@ final class Creative_Pear_Monitor
             'signals' => (array) ($session['signals'] ?? []),
             'created_at' => absint($session['created_at'] ?? 0),
             'elementor_submission' => $this->find_elementor_test_submission($session),
+        ]);
+    }
+
+    public function register_form_activity_route(): void
+    {
+        register_rest_route('creative-pear-monitor/v1', '/form-activity', [
+            'methods' => 'POST',
+            'callback' => [$this, 'latest_form_activity'],
+            'permission_callback' => [$this, 'authorize_form_test_session'],
+        ]);
+    }
+
+    public function latest_form_activity(): WP_REST_Response
+    {
+        global $wpdb;
+
+        $checked_at = gmdate('c');
+        if (! defined('ELEMENTOR_PRO_VERSION')) {
+            return new WP_REST_Response(['status' => 'unsupported', 'checked_at' => $checked_at, 'reason' => 'elementor_pro_inactive']);
+        }
+
+        $submissions = $wpdb->prefix.'e_submissions';
+        $actions = $wpdb->prefix.'e_submissions_actions_log';
+        foreach ([$submissions, $actions] as $table) {
+            if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table))) !== $table) {
+                return new WP_REST_Response(['status' => 'unsupported', 'checked_at' => $checked_at, 'reason' => 'submissions_unavailable']);
+            }
+        }
+
+        $submission = $wpdb->get_row("SELECT id, created_at_gmt FROM {$submissions} ORDER BY id DESC LIMIT 1", ARRAY_A);
+        if (! is_array($submission)) {
+            return new WP_REST_Response(['status' => 'no_submissions', 'checked_at' => $checked_at, 'submission' => null, 'actions' => []]);
+        }
+
+        $has_label = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$actions} LIKE %s", 'action_label')) !== null;
+        $label_column = $has_label ? 'action_label' : 'action_name AS action_label';
+        $logs = $wpdb->get_results($wpdb->prepare(
+            "SELECT action_name, {$label_column}, status FROM {$actions} WHERE submission_id = %d ORDER BY id ASC",
+            absint($submission['id'])
+        ), ARRAY_A);
+        if (! is_array($logs)) {
+            return new WP_REST_Response(['status' => 'inconclusive', 'checked_at' => $checked_at, 'reason' => 'action_log_unavailable', 'submission' => ['id' => absint($submission['id']), 'submitted_at' => str_replace(' ', 'T', (string) $submission['created_at_gmt']).'Z'], 'actions' => []]);
+        }
+        $action_results = [];
+        foreach ((array) $logs as $log) {
+            $action_results[] = [
+                'name' => sanitize_key((string) ($log['action_name'] ?? '')),
+                'label' => sanitize_text_field((string) ($log['action_label'] ?? '')),
+                'status' => sanitize_key((string) ($log['status'] ?? '')),
+            ];
+        }
+
+        $states = array_column($action_results, 'status');
+        $has_failure = (bool) array_intersect($states, ['failed', 'error', 'failure']);
+        $all_successful = $states !== [] && count(array_diff($states, ['success', 'completed', 'ok'])) === 0;
+
+        return new WP_REST_Response([
+            'status' => $has_failure ? 'failed' : ($all_successful ? 'passed' : 'inconclusive'),
+            'checked_at' => $checked_at,
+            'submission' => [
+                'id' => absint($submission['id']),
+                'submitted_at' => str_replace(' ', 'T', (string) $submission['created_at_gmt']).'Z',
+            ],
+            'actions' => $action_results,
         ]);
     }
 
