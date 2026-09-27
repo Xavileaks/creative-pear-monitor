@@ -185,6 +185,11 @@ final class Creative_Pear_Monitor
             'callback' => [$this, 'create_form_test_session'],
             'permission_callback' => [$this, 'authorize_form_test_session'],
         ]);
+        register_rest_route('creative-pear-monitor/v1', '/form-test-result', [
+            'methods' => 'POST',
+            'callback' => [$this, 'form_test_result'],
+            'permission_callback' => [$this, 'authorize_form_test_session'],
+        ]);
     }
 
     public function authorize_form_test_session(WP_REST_Request $request)
@@ -220,13 +225,33 @@ final class Creative_Pear_Monitor
             'token_hash' => $token_hash,
             'site_id' => absint($settings['site_id'] ?? 0),
             'created_at' => time(),
-        ], 3 * MINUTE_IN_SECONDS);
+            'signals' => [],
+        ], 10 * MINUTE_IN_SECONDS);
 
         return new WP_REST_Response([
             'token' => $token,
-            'expires_in' => 180,
+            'expires_in' => 600,
             'supported_frameworks' => $this->supported_form_frameworks(),
         ], 201);
+    }
+
+    public function form_test_result(WP_REST_Request $request)
+    {
+        $token = sanitize_text_field((string) $request->get_param('token'));
+        if (! preg_match('/^[a-f0-9]{64}$/D', $token)) {
+            return new WP_Error('cp_form_test_invalid', 'Invalid form test token.', ['status' => 400]);
+        }
+
+        $session = get_transient('creative_pear_form_test_'.hash('sha256', $token));
+        $settings = (array) get_option(self::OPTION, []);
+        if (! is_array($session) || absint($session['site_id'] ?? 0) !== absint($settings['site_id'] ?? 0)) {
+            return new WP_Error('cp_form_test_expired', 'Form test session expired.', ['status' => 404]);
+        }
+
+        return new WP_REST_Response([
+            'signals' => (array) ($session['signals'] ?? []),
+            'created_at' => absint($session['created_at'] ?? 0),
+        ]);
     }
 
     public function register_update_route(): void
@@ -385,6 +410,30 @@ final class Creative_Pear_Monitor
             return;
         }
 
+        add_action('wp_mail_succeeded', function () { $this->record_form_test_signal('mail_accepted'); }, PHP_INT_MAX, 0);
+        add_action('wp_mail_failed', function () { $this->record_form_test_signal('mail_failed'); }, PHP_INT_MAX, 0);
+        add_action('wpcf7_mail_sent', function () { $this->record_form_test_signal('contact_form_7_submitted'); }, PHP_INT_MAX, 0);
+        add_action('wpcf7_mail_failed', function () { $this->record_form_test_signal('contact_form_7_failed'); }, PHP_INT_MAX, 0);
+        add_action('wpforms_process_complete', function ($fields, $entry, $form_data, $entry_id) {
+            $this->record_form_test_signal('wpforms_submitted');
+            if (absint($entry_id) > 0) {
+                $this->record_form_test_signal('entry_saved');
+            }
+        }, PHP_INT_MAX, 4);
+        add_action('gform_after_submission', function ($entry) {
+            if (($entry['status'] ?? '') === 'spam') {
+                $this->record_form_test_signal('gravity_forms_spam');
+
+                return;
+            }
+            $this->record_form_test_signal('gravity_forms_submitted');
+            if (absint($entry['id'] ?? 0) > 0) {
+                $this->record_form_test_signal('entry_saved');
+            }
+        }, PHP_INT_MAX, 1);
+        add_action('elementor_pro/forms/new_record', function () { $this->record_form_test_signal('elementor_submitted'); }, PHP_INT_MAX, 0);
+        add_action('elementor_pro/forms/mail_sent', function () { $this->record_form_test_signal('elementor_mail_sent'); }, PHP_INT_MAX, 0);
+
         add_filter('wpforms_process_bypass_captcha', '__return_true', PHP_INT_MAX, 3);
         add_filter('wpcf7_spam', '__return_false', PHP_INT_MAX, 1);
         add_filter('gform_entry_is_spam', '__return_false', PHP_INT_MAX, 3);
@@ -424,6 +473,25 @@ final class Creative_Pear_Monitor
         return is_array($session)
             && hash_equals((string) ($session['token_hash'] ?? ''), $token_hash)
             && absint($session['site_id'] ?? 0) === absint($settings['site_id'] ?? 0);
+    }
+
+    private function record_form_test_signal(string $signal): void
+    {
+        $token = sanitize_text_field(wp_unslash($_SERVER['HTTP_X_CREATIVE_PEAR_TEST'] ?? ''));
+        if ($token === '') {
+            return;
+        }
+
+        $key = 'creative_pear_form_test_'.hash('sha256', $token);
+        $session = get_transient($key);
+        if (! is_array($session)) {
+            return;
+        }
+
+        $signals = (array) ($session['signals'] ?? []);
+        $signals[$signal] = absint($signals[$signal] ?? 0) + 1;
+        $session['signals'] = $signals;
+        set_transient($key, $session, 10 * MINUTE_IN_SECONDS);
     }
 
     private function supported_form_frameworks(): array
