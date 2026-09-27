@@ -211,7 +211,7 @@ final class Creative_Pear_Monitor
         return true;
     }
 
-    public function create_form_test_session(): WP_REST_Response
+    public function create_form_test_session(WP_REST_Request $request): WP_REST_Response
     {
         try {
             $token = bin2hex(random_bytes(32));
@@ -220,11 +220,13 @@ final class Creative_Pear_Monitor
         }
 
         $settings = (array) get_option(self::OPTION, []);
+        $test_email = sanitize_email((string) $request->get_param('test_email'));
         $token_hash = hash('sha256', $token);
         set_transient('creative_pear_form_test_'.$token_hash, [
             'token_hash' => $token_hash,
             'site_id' => absint($settings['site_id'] ?? 0),
             'created_at' => time(),
+            'test_email' => is_email($test_email) ? strtolower($test_email) : '',
             'signals' => [],
         ], 10 * MINUTE_IN_SECONDS);
 
@@ -251,7 +253,58 @@ final class Creative_Pear_Monitor
         return new WP_REST_Response([
             'signals' => (array) ($session['signals'] ?? []),
             'created_at' => absint($session['created_at'] ?? 0),
+            'elementor_submission' => $this->find_elementor_test_submission($session),
         ]);
+    }
+
+    private function find_elementor_test_submission(array $session): array
+    {
+        global $wpdb;
+
+        $email = (string) ($session['test_email'] ?? '');
+        if (! is_email($email) || ! defined('ELEMENTOR_PRO_VERSION')) {
+            return ['checked' => false, 'found' => false];
+        }
+
+        $submissions = $wpdb->prefix.'e_submissions';
+        $values = $wpdb->prefix.'e_submissions_values';
+        $actions = $wpdb->prefix.'e_submissions_actions_log';
+        foreach ([$submissions, $values] as $table) {
+            if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table))) !== $table) {
+                return ['checked' => false, 'found' => false];
+            }
+        }
+
+        $started_at = gmdate('Y-m-d H:i:s', max(0, absint($session['created_at'] ?? 0) - 30));
+        $submission = $wpdb->get_row($wpdb->prepare(
+            "SELECT s.id, s.created_at_gmt FROM {$submissions} s INNER JOIN {$values} v ON v.submission_id = s.id WHERE v.value = %s AND s.created_at_gmt >= %s ORDER BY s.id DESC LIMIT 1",
+            $email,
+            $started_at
+        ), ARRAY_A);
+        if (! is_array($submission)) {
+            return ['checked' => true, 'found' => false];
+        }
+
+        $failed_actions = [];
+        if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($actions))) === $actions) {
+            $logs = $wpdb->get_results($wpdb->prepare(
+                "SELECT action_name, status FROM {$actions} WHERE submission_id = %d",
+                absint($submission['id'])
+            ), ARRAY_A);
+            foreach ((array) $logs as $log) {
+                if (in_array(strtolower((string) ($log['status'] ?? '')), ['failed', 'error'], true)) {
+                    $failed_actions[] = sanitize_key((string) ($log['action_name'] ?? 'unknown'));
+                }
+            }
+        }
+
+        return [
+            'checked' => true,
+            'found' => true,
+            'id' => absint($submission['id']),
+            'created_at_gmt' => (string) $submission['created_at_gmt'],
+            'failed_actions' => array_values(array_unique($failed_actions)),
+        ];
     }
 
     public function register_update_route(): void
