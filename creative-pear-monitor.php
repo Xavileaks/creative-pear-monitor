@@ -983,6 +983,7 @@ final class Creative_Pear_Monitor
             $recent_order_ids = wc_get_orders([
                 'limit' => 100,
                 'return' => 'ids',
+                'type' => 'shop_order',
                 'status' => $paid_status_slugs,
                 'date_created' => '>='.$since_timestamp,
                 'orderby' => 'date',
@@ -990,7 +991,7 @@ final class Creative_Pear_Monitor
             ]);
             foreach ($recent_order_ids as $order_id) {
                 $order = wc_get_order($order_id);
-                if (! $order) {
+                if (! $order instanceof WC_Order) {
                     continue;
                 }
                 $gateway_id = (string) $order->get_payment_method();
