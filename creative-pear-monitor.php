@@ -803,7 +803,14 @@ final class Creative_Pear_Monitor
                 'update_version' => is_object($theme_updates) && isset($theme_updates->response[$slug]) ? ($theme_updates->response[$slug]['new_version'] ?? null) : null,
             ];
         }
-        $woo_details = $this->woocommerce_details($woocommerce);
+        try {
+            $woo_details = $this->woocommerce_details($woocommerce);
+        } catch (\Throwable $exception) {
+            $woo_details = [
+                'active' => $woocommerce,
+                'order_activity' => ['status' => 'unavailable', 'checked_at' => gmdate('c'), 'reason' => 'collection_failed'],
+            ];
+        }
         $defender = $this->defender_details($plugins, $active);
         $database = $this->database_details();
         $inventory_hash = hash('sha256', wp_json_encode([$plugin_inventory, $theme_inventory, $admins]));
@@ -912,7 +919,111 @@ final class Creative_Pear_Monitor
             'checkout_page' => function_exists('wc_get_page_permalink') ? wc_get_page_permalink('checkout') : null,
             'cart_page' => function_exists('wc_get_page_permalink') ? wc_get_page_permalink('cart') : null,
             'sales_30d' => $this->woocommerce_sales_snapshot(),
+            'order_activity' => $this->woocommerce_order_activity(),
         ];
+    }
+
+    private function woocommerce_order_activity(): array
+    {
+        $checked_at = gmdate('c');
+        if (! function_exists('wc_get_orders')) {
+            return ['status' => 'unavailable', 'checked_at' => $checked_at, 'reason' => 'woo_api_unavailable'];
+        }
+
+        $orders = wc_get_orders([
+            'type' => 'shop_order',
+            'limit' => 10,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ]);
+        $latest_order = null;
+        $failed_streak = 0;
+        $within_streak = true;
+        $since = time() - (30 * DAY_IN_SECONDS);
+
+        foreach ($orders as $order) {
+            if (! $order instanceof WC_Order) {
+                continue;
+            }
+
+            $created = $order->get_date_created();
+            $created_at = $created ? gmdate('c', $created->getTimestamp()) : null;
+            $status = (string) $order->get_status();
+            if ($latest_order === null) {
+                $latest_order = [
+                    'id' => (int) $order->get_id(),
+                    'number' => substr(sanitize_text_field((string) $order->get_order_number()), 0, 40),
+                    'status' => $status,
+                    'created_at' => $created_at,
+                    'total' => round((float) $order->get_total(), 2),
+                    'currency' => (string) $order->get_currency(),
+                ];
+            }
+
+            if ($within_streak && $status === 'failed' && $created && $created->getTimestamp() >= $since) {
+                $failed_streak++;
+            } else {
+                $within_streak = false;
+            }
+        }
+
+        $latest_failure = null;
+        $failed_orders = wc_get_orders([
+            'type' => 'shop_order',
+            'status' => ['failed'],
+            'date_created' => '>='.$since,
+            'limit' => 1,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ]);
+        foreach ($failed_orders as $order) {
+            if (! $order instanceof WC_Order || $order->get_status() !== 'failed') {
+                continue;
+            }
+
+            $created = $order->get_date_created();
+            $latest_failure = [
+                'id' => (int) $order->get_id(),
+                'number' => substr(sanitize_text_field((string) $order->get_order_number()), 0, 40),
+                'created_at' => $created ? gmdate('c', $created->getTimestamp()) : null,
+                'error' => $this->woocommerce_failure_reason((int) $order->get_id()),
+            ];
+            break;
+        }
+
+        return [
+            'status' => 'available',
+            'checked_at' => $checked_at,
+            'latest_order' => $latest_order,
+            'latest_failure' => $latest_failure,
+            'failed_streak' => $failed_streak,
+        ];
+    }
+
+    private function woocommerce_failure_reason(int $order_id): ?string
+    {
+        if (! function_exists('wc_get_order_notes')) {
+            return null;
+        }
+
+        $notes = wc_get_order_notes(['order_id' => $order_id, 'type' => 'internal', 'limit' => 10]);
+        foreach ($notes as $note) {
+            $content = trim(wp_strip_all_tags((string) ($note->content ?? '')));
+            if ($content === '' || ! preg_match('/fail|error|declin|rechaz|fall[oó]|deneg|no se pudo/iu', $content)) {
+                continue;
+            }
+
+            $content = preg_replace('/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu', '[correo oculto]', $content);
+            $content = preg_replace('~https?://\S+~iu', '[URL oculta]', $content);
+            $content = preg_replace('/\b(?:\d[ -]?){12,19}\b/u', '[número oculto]', $content);
+            $content = preg_replace('/\b(?:\d{1,3}\.){3}\d{1,3}\b/u', '[IP oculta]', $content);
+
+            $content = trim(preg_replace('/\s+/u', ' ', $content));
+
+            return function_exists('mb_substr') ? mb_substr($content, 0, 240) : substr($content, 0, 240);
+        }
+
+        return null;
     }
 
     private function woocommerce_sales_snapshot(): array
