@@ -834,6 +834,7 @@ final class Creative_Pear_Monitor
                 'woocommerce' => $woocommerce,
                 'woocommerce_details' => $woo_details,
                 'defender' => $defender,
+                'site_kit' => $this->site_kit_details($plugins, $active),
                 'active_plugins' => count($active),
                 'plugins' => $plugin_inventory,
                 'themes' => $theme_inventory,
@@ -893,6 +894,49 @@ final class Creative_Pear_Monitor
         $locale = function_exists('determine_locale') ? determine_locale() : get_locale();
 
         return strpos(strtolower(str_replace('-', '_', $locale)), 'es') === 0 ? $spanish : $english;
+    }
+
+    private function site_kit_details(array $plugins, array $active_plugins): array
+    {
+        $file = 'google-site-kit/google-site-kit.php';
+        $installed = isset($plugins[$file]);
+        $active = $installed && (in_array($file, $active_plugins, true)
+            || (function_exists('is_plugin_active_for_network') && is_plugin_active_for_network($file)));
+        $result = [
+            'installed' => $installed,
+            'active' => $active,
+            'configured' => null,
+            'agency_user_connected' => null,
+            'checked_at' => gmdate('c'),
+        ];
+
+        if (! $active) {
+            return $result;
+        }
+
+        try {
+            if (! class_exists('Google\\Site_Kit\\Plugin') || ! class_exists('Google\\Site_Kit\\Core\\Authentication\\Authentication')) {
+                return $result;
+            }
+
+            $context = \Google\Site_Kit\Plugin::instance()->context();
+            $authentication = new \Google\Site_Kit\Core\Authentication\Authentication($context);
+            $result['configured'] = (bool) $authentication->is_setup_completed();
+
+            $agency_user = get_user_by('email', 'web@creativepearagency.com');
+            if ($agency_user && in_array('administrator', (array) $agency_user->roles, true)
+                && class_exists('Google\\Site_Kit\\Core\\Storage\\User_Options')
+                && class_exists('Google\\Site_Kit\\Core\\Authentication\\Token')) {
+                $user_options = new \Google\Site_Kit\Core\Storage\User_Options($context, (int) $agency_user->ID);
+                $result['agency_user_connected'] = (bool) (new \Google\Site_Kit\Core\Authentication\Token($user_options))->has();
+            }
+        } catch (\Throwable $exception) {
+            // Site Kit internals are optional; an unreadable state must not become a false incident.
+            $result['configured'] = null;
+            $result['agency_user_connected'] = null;
+        }
+
+        return $result;
     }
 
     private function woocommerce_details(bool $enabled): array
