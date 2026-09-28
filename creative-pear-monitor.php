@@ -835,6 +835,7 @@ final class Creative_Pear_Monitor
                 'woocommerce_details' => $woo_details,
                 'defender' => $defender,
                 'site_kit' => $this->site_kit_details($plugins, $active),
+                'site_hygiene' => $this->site_hygiene_details($plugins, $active),
                 'active_plugins' => count($active),
                 'plugins' => $plugin_inventory,
                 'themes' => $theme_inventory,
@@ -934,6 +935,107 @@ final class Creative_Pear_Monitor
             // Site Kit internals are optional; an unreadable state must not become a false incident.
             $result['configured'] = null;
             $result['agency_user_connected'] = null;
+        }
+
+        return $result;
+    }
+
+    private function site_hygiene_details(array $plugins, array $active_plugins): array
+    {
+        $has_active_plugin = static function (array $slugs) use ($plugins, $active_plugins): bool {
+            foreach ($slugs as $slug) {
+                if (isset($plugins[$slug]) && (in_array($slug, $active_plugins, true)
+                    || (function_exists('is_plugin_active_for_network') && is_plugin_active_for_network($slug)))) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+        $result = [
+            'checked_at' => gmdate('c'),
+            'child_theme' => (bool) wp_get_theme()->parent(),
+            'cache_plugin' => $has_active_plugin([
+                'litespeed-cache/litespeed-cache.php', 'wp-rocket/wp-rocket.php',
+                'w3-total-cache/w3-total-cache.php', 'wp-super-cache/wp-cache.php',
+                'wp-fastest-cache/wpFastestCache.php', 'cache-enabler/cache-enabler.php',
+                'sg-cachepress/sg-cachepress.php', 'breeze/breeze.php',
+                'wp-optimize/wp-optimize.php', 'autoptimize/autoptimize.php',
+            ]),
+            'smtp_plugin' => $has_active_plugin([
+                'wp-mail-smtp/wp_mail_smtp.php', 'easy-wp-smtp/easy-wp-smtp.php',
+                'post-smtp/postman-smtp.php', 'fluent-smtp/fluent-smtp.php',
+                'smtp-mailer/main.php', 'mailgun/mailgun.php',
+            ]),
+            'hcaptcha' => ['installed' => false, 'active' => false, 'configured' => null],
+            'ai1wm' => ['installed' => false, 'active' => false, 'local_backup_count' => null,
+                'drive_extension_active' => false, 'drive_connected' => null,
+                'agency_account' => null, 'retention_correct' => null],
+        ];
+
+        foreach ($plugins as $file => $plugin) {
+            if (strpos($file, 'hcaptcha/') === 0 || strpos($file, 'hcaptcha-for-forms-and-more/') === 0) {
+                $result['hcaptcha']['installed'] = true;
+                $result['hcaptcha']['active'] = $has_active_plugin([$file]);
+            }
+        }
+        if ($result['hcaptcha']['active']) {
+            $settings = get_option('hcaptcha_settings', null);
+            if (is_array($settings)) {
+                $result['hcaptcha']['configured'] = ! empty($settings['site_key'])
+                    && ! empty($settings['secret_key']) && ($settings['mode'] ?? '') === 'live';
+            }
+        }
+
+        $ai1wm_file = 'all-in-one-wp-migration/all-in-one-wp-migration.php';
+        $result['ai1wm']['installed'] = isset($plugins[$ai1wm_file]);
+        $result['ai1wm']['active'] = $has_active_plugin([$ai1wm_file]);
+        if (! $result['ai1wm']['active']) {
+            return $result;
+        }
+
+        $backup_path = get_option('ai1wm_backups_path');
+        if (! is_string($backup_path) || $backup_path === '') {
+            $backup_path = defined('AI1WM_BACKUPS_PATH') ? AI1WM_BACKUPS_PATH : WP_CONTENT_DIR.'/ai1wm-backups';
+        }
+        if (is_dir($backup_path) && is_readable($backup_path)) {
+            $backups = glob(trailingslashit($backup_path).'*.wpress');
+            $result['ai1wm']['local_backup_count'] = is_array($backups) ? count($backups) : null;
+        } elseif (! file_exists($backup_path)) {
+            $result['ai1wm']['local_backup_count'] = 0;
+        }
+
+        foreach ($plugins as $file => $plugin) {
+            if (strpos($file, 'all-in-one-wp-migration-gdrive-extension/') === 0 && $has_active_plugin([$file])) {
+                $result['ai1wm']['drive_extension_active'] = true;
+                break;
+            }
+        }
+        if (! $result['ai1wm']['drive_extension_active']) {
+            return $result;
+        }
+
+        $token = get_option('ai1wmge_gdrive_token', false);
+        $result['ai1wm']['drive_connected'] = ! empty($token);
+        $backups = get_option('ai1wmge_gdrive_backups', false);
+        $total = get_option('ai1wmge_gdrive_total', false);
+        $days = get_option('ai1wmge_gdrive_days', false);
+        if ($backups !== false && $total !== false && $days !== false) {
+            $result['ai1wm']['retention_correct'] = (int) $backups === 3
+                && preg_match('/^0(?:[a-z]*)?$/i', trim((string) $total)) === 1
+                && (int) $days === 0;
+        }
+        if ($result['ai1wm']['drive_connected'] && class_exists('Ai1wmge_GDrive_Client')) {
+            try {
+                $client = new \Ai1wmge_GDrive_Client($token, get_option('ai1wmge_gdrive_ssl', true));
+                $account = $client->get_account_info();
+                $email = $account['user']['emailAddress'] ?? null;
+                if (is_string($email) && $email !== '') {
+                    $result['ai1wm']['agency_account'] = strcasecmp($email, 'web@creativepearagency.com') === 0;
+                }
+            } catch (\Throwable $exception) {
+                // An unreadable Google account must not create a misleading mismatch incident.
+            }
         }
 
         return $result;
