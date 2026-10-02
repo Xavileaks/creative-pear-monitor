@@ -49,6 +49,7 @@ final class Creative_Pear_Monitor
         add_action('plugins_loaded', [$this, 'migrate_schedule']);
         add_action('rest_api_init', [$this, 'register_form_activity_route']);
         add_action('rest_api_init', [$this, 'register_update_route']);
+        add_action('rest_api_init', [$this, 'register_plugin_control_route']);
         add_filter('plugin_action_links_'.plugin_basename(__FILE__), [$this, 'action_links']);
         add_filter('all_plugins', [$this, 'localize_plugin_data']);
         add_action('update_option_'.self::OPTION, [$this, 'queue_report'], 10, 2);
@@ -381,6 +382,110 @@ final class Creative_Pear_Monitor
             'methods' => 'POST',
             'callback' => [$this, 'update_plugin'],
             'permission_callback' => [$this, 'authorize_update_request'],
+        ]);
+    }
+
+    public function register_plugin_control_route(): void
+    {
+        register_rest_route('creative-pear-monitor/v1', '/plugin-status', [
+            'methods' => 'POST',
+            'callback' => [$this, 'change_plugin_status'],
+            'permission_callback' => [$this, 'authorize_plugin_control'],
+        ]);
+    }
+
+    public function authorize_plugin_control(WP_REST_Request $request)
+    {
+        $settings = (array) get_option(self::OPTION, []);
+        $site_id = absint($request->get_header('X-CP-Site-ID'));
+        $timestamp = absint($request->get_header('X-CP-Timestamp'));
+        $request_id = sanitize_text_field((string) $request->get_header('X-CP-Request-ID'));
+        $signature = sanitize_text_field((string) $request->get_header('X-CP-Signature'));
+        $file = $request->get_param('file');
+        $action = $request->get_param('action');
+
+        if (! $this->has_credentials($settings)
+            || $site_id !== absint($settings['site_id'] ?? 0)
+            || abs(time() - $timestamp) > 120
+            || ! preg_match('/^[a-f0-9-]{36}$/iD', $request_id)
+            || ! is_string($file)
+            || ! is_string($action)
+            || ! in_array($action, ['activate', 'deactivate'], true)) {
+            return new WP_Error('cp_plugin_control_forbidden', 'Invalid plugin control request.', ['status' => 403]);
+        }
+
+        $expected = hash_hmac('sha256', $site_id.'|'.$timestamp.'|'.$request_id.'|'.$file.'|'.$action, (string) $settings['key']);
+        if (! hash_equals($expected, $signature)) {
+            return new WP_Error('cp_plugin_control_forbidden', 'Invalid plugin control signature.', ['status' => 403]);
+        }
+
+        $request_key = 'creative_pear_plugin_control_'.hash('sha256', $request_id);
+        if (get_transient($request_key)) {
+            return new WP_Error('cp_plugin_control_replayed', 'Plugin control request already used.', ['status' => 409]);
+        }
+        set_transient($request_key, 1, 3 * MINUTE_IN_SECONDS);
+
+        return true;
+    }
+
+    public function change_plugin_status(WP_REST_Request $request)
+    {
+        require_once ABSPATH.'wp-admin/includes/plugin.php';
+
+        $file = (string) $request->get_param('file');
+        $action = (string) $request->get_param('action');
+        $plugins = get_plugins();
+        if ($file === plugin_basename(__FILE__)) {
+            return new WP_Error('cp_monitor_protected', 'Creative Pear Monitor cannot be changed from the dashboard.', ['status' => 403]);
+        }
+        if (! isset($plugins[$file])) {
+            return new WP_Error('cp_plugin_missing', 'Plugin no longer exists on this site.', ['status' => 404]);
+        }
+        if (is_multisite() && is_plugin_active_for_network($file)) {
+            return new WP_Error('cp_network_plugin', 'Network-wide plugins must be managed in WordPress.', ['status' => 403]);
+        }
+
+        $was_active = is_plugin_active($file);
+        $target_active = $action === 'activate';
+        if ($was_active === $target_active) {
+            return new WP_REST_Response([
+                'file' => $file, 'active' => $was_active,
+                'message' => 'Plugin status changed before this request. Refresh the dashboard.',
+            ], 409);
+        }
+
+        if ($target_active && is_multisite() && is_network_only_plugin($file)) {
+            return new WP_Error('cp_network_only_plugin', 'Network-only plugins must be managed in WordPress.', ['status' => 403]);
+        }
+        if (! $target_active && class_exists('WP_Plugin_Dependencies')) {
+            WP_Plugin_Dependencies::initialize();
+            if (WP_Plugin_Dependencies::has_active_dependents($file)) {
+                return new WP_Error('cp_plugin_has_dependents', 'Other active plugins depend on this plugin.', ['status' => 409]);
+            }
+        }
+
+        if ($target_active) {
+            $result = activate_plugin($file);
+            if (is_wp_error($result)) {
+                return new WP_Error('cp_plugin_activation_failed', $result->get_error_message(), ['status' => 422]);
+            }
+        } else {
+            deactivate_plugins($file, false, false);
+        }
+
+        $active = is_plugin_active($file);
+        if ($active !== $target_active) {
+            return new WP_REST_Response([
+                'file' => $file, 'active' => $active,
+                'message' => 'WordPress did not confirm the requested plugin status.',
+            ], 502);
+        }
+
+        $this->queue_report();
+
+        return new WP_REST_Response([
+            'file' => $file, 'active' => $active,
+            'message' => $active ? 'Plugin activated.' : 'Plugin deactivated.',
         ]);
     }
 
@@ -782,6 +887,7 @@ final class Creative_Pear_Monitor
             $checkout = $checkout_page > 0 && count($gateways) > 0 ? 'ok' : 'failed';
         }
         $active = (array) get_option('active_plugins', []);
+        $network_active = is_multisite() ? array_keys((array) get_site_option('active_sitewide_plugins', [])) : [];
         $plugins = get_plugins();
         $plugin_inventory = [];
         foreach ($plugins as $file => $plugin) {
@@ -789,7 +895,8 @@ final class Creative_Pear_Monitor
                 'file' => $file,
                 'name' => $plugin['Name'] ?? $file,
                 'version' => $plugin['Version'] ?? null,
-                'active' => in_array($file, $active, true),
+                'active' => in_array($file, $active, true) || in_array($file, $network_active, true),
+                'network_active' => in_array($file, $network_active, true),
                 'update_version' => is_object($plugin_updates) && isset($plugin_updates->response[$file]) ? ($plugin_updates->response[$file]->new_version ?? null) : null,
             ];
         }
@@ -829,6 +936,7 @@ final class Creative_Pear_Monitor
                     'version' => get_file_data(__FILE__, ['Version' => 'Version'])['Version'] ?: self::VERSION,
                     'remote_update' => true,
                     'update_protocol' => 2,
+                    'plugin_control_protocol' => 1,
                 ],
                 'wordpress_login_url' => $this->wordpress_login_url($active),
                 'woocommerce' => $woocommerce,
@@ -836,7 +944,7 @@ final class Creative_Pear_Monitor
                 'defender' => $defender,
                 'site_kit' => $this->site_kit_details($plugins, $active),
                 'site_hygiene' => $this->site_hygiene_details($plugins, $active),
-                'active_plugins' => count($active),
+                'active_plugins' => count(array_unique(array_merge($active, $network_active))),
                 'plugins' => $plugin_inventory,
                 'themes' => $theme_inventory,
                 'elementor' => [
