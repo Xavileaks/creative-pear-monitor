@@ -15,6 +15,13 @@ jobs:
       - name: Descargar código
         uses: actions/checkout@v4
 
+      - name: Comprobar contratos del agente
+        run: |
+          php -l creative-pear-monitor.php
+          php -l includes/class-creative-pear-monitor-updater.php
+          php tests/snapshot-auth.php
+          php tests/update-agent.php
+
       - name: Crear ZIP versionado
         id: package
         shell: bash
