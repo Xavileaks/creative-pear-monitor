@@ -568,7 +568,7 @@ final class Creative_Pear_Monitor
 
             $was_active = is_plugin_active($plugin);
             $network_wide = is_multisite() && is_plugin_active_for_network($plugin);
-            $skin = new Automatic_Upgrader_Skin;
+            $skin = new WP_Ajax_Upgrader_Skin;
             $upgrader = new Plugin_Upgrader($skin);
             $result = $upgrader->upgrade($plugin, ['clear_update_cache' => true]);
 
@@ -601,8 +601,8 @@ final class Creative_Pear_Monitor
                     'status' => 'failed',
                     'version' => self::VERSION,
                     'message' => is_wp_error($errors) && $errors->has_errors()
-                        ? $errors->get_error_message()
-                        : $this->text('WordPress no pudo reemplazar los archivos del agente.', 'WordPress could not replace the agent files.'),
+                        ? wp_strip_all_tags($skin->get_error_messages())
+                        : $this->text('WordPress no pudo iniciar la actualización del agente. Puede requerir acceso al sistema de archivos desde su administrador.', 'WordPress could not start the agent update. Filesystem access may be required from its admin.'),
                 ], 502);
             }
 
@@ -622,6 +622,15 @@ final class Creative_Pear_Monitor
                 'version' => $version,
                 'message' => $this->text('Creative Pear Monitor se actualizó correctamente.', 'Creative Pear Monitor was updated successfully.'),
             ]);
+        } catch (Throwable $exception) {
+            error_log('[Creative Pear Monitor] Agent update: '.get_class($exception).': '.$exception->getMessage().' in '.$exception->getFile().':'.$exception->getLine());
+
+            return new WP_REST_Response([
+                'status' => 'failed',
+                'version' => self::VERSION,
+                'error_code' => 'cp_agent_update_exception',
+                'message' => $this->text('WordPress interrumpió la actualización del agente. Revisa el registro de errores del sitio para conocer la causa.', 'WordPress interrupted the agent update. Check the site error log for the cause.'),
+            ], 502);
         } finally {
             delete_option(self::UPDATE_LOCK_OPTION);
         }
