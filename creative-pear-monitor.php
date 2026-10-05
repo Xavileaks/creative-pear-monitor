@@ -41,7 +41,7 @@ final class Creative_Pear_Monitor
     {
         $this->updater = new Creative_Pear_Monitor_Updater(__FILE__, self::VERSION);
         add_filter('cron_schedules', [$this, 'schedule']);
-        add_action(self::EVENT, [$this, 'send_report']);
+        add_action(self::EVENT, [$this, 'send_scheduled_report']);
         add_action(self::UPDATE_CHECK_EVENT, [$this->updater, 'refresh_update_notice']);
         add_action('admin_menu', [$this, 'menu']);
         add_action('admin_init', [$this, 'register']);
@@ -50,6 +50,7 @@ final class Creative_Pear_Monitor
         add_action('rest_api_init', [$this, 'register_form_activity_route']);
         add_action('rest_api_init', [$this, 'register_update_route']);
         add_action('rest_api_init', [$this, 'register_plugin_control_route']);
+        add_action('rest_api_init', [$this, 'register_snapshot_route']);
         add_filter('plugin_action_links_'.plugin_basename(__FILE__), [$this, 'action_links']);
         add_filter('all_plugins', [$this, 'localize_plugin_data']);
         add_action('update_option_'.self::OPTION, [$this, 'queue_report'], 10, 2);
@@ -161,6 +162,7 @@ final class Creative_Pear_Monitor
 
     public function queue_report(...$unused): void
     {
+        delete_transient('creative_pear_monitor_snapshot');
         if ($this->report_queued) {
             return;
         }
@@ -873,6 +875,33 @@ final class Creative_Pear_Monitor
             );
         }
 
+        $payload = $this->collect_report();
+        $url = trailingslashit(self::DASHBOARD_URL).'api/agent/'.absint($settings['site_id']).'/report';
+        $response = wp_remote_post($url, ['timeout' => 20, 'headers' => ['Content-Type' => 'application/json', 'Accept' => 'application/json', 'X-CP-Agent-Key' => $settings['key']], 'body' => wp_json_encode($payload)]);
+        if (is_wp_error($response)) {
+            return $response;
+        }
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code < 200 || $code >= 300) {
+            return new WP_Error('cp_remote_error', sprintf('The control center returned HTTP %d.', $code));
+        }
+        update_option('creative_pear_monitor_last_success', time(), false);
+        update_option(self::CONNECTION_HASH_OPTION, $this->connection_hash($settings), false);
+
+        return true;
+    }
+
+    public function send_scheduled_report(): void
+    {
+        if ((int) get_option('creative_pear_monitor_last_pull', 0) < time() - 15 * MINUTE_IN_SECONDS) {
+            $this->send_report();
+        }
+    }
+
+    private function collect_report(): array
+    {
+        require_once ABSPATH.'wp-admin/includes/plugin.php';
+        require_once ABSPATH.'wp-admin/includes/update.php';
         wp_update_plugins();
         wp_update_themes();
         $plugin_updates = get_site_transient('update_plugins');
@@ -937,6 +966,7 @@ final class Creative_Pear_Monitor
                     'remote_update' => true,
                     'update_protocol' => 2,
                     'plugin_control_protocol' => 1,
+                    'snapshot_protocol' => 1,
                 ],
                 'wordpress_login_url' => $this->wordpress_login_url($active),
                 'woocommerce' => $woocommerce,
@@ -944,6 +974,7 @@ final class Creative_Pear_Monitor
                 'defender' => $defender,
                 'site_kit' => $this->site_kit_details($plugins, $active),
                 'site_hygiene' => $this->site_hygiene_details($plugins, $active),
+                'form_activity' => $this->latest_form_activity()->get_data(),
                 'active_plugins' => count(array_unique(array_merge($active, $network_active))),
                 'plugins' => $plugin_inventory,
                 'themes' => $theme_inventory,
@@ -963,29 +994,72 @@ final class Creative_Pear_Monitor
                 'inventory_hash' => $inventory_hash,
             ],
         ];
-        $url = trailingslashit(self::DASHBOARD_URL).'api/agent/'.absint($settings['site_id']).'/report';
-        $response = wp_remote_post($url, ['timeout' => 20, 'headers' => ['Content-Type' => 'application/json', 'Accept' => 'application/json', 'X-CP-Agent-Key' => $settings['key']], 'body' => wp_json_encode($payload)]);
-        if (is_wp_error($response)) {
-            return $response;
-        }
-        $code = wp_remote_retrieve_response_code($response);
-        if ($code < 200 || $code >= 300) {
-            return new WP_Error(
-                'cp_remote_error',
-                sprintf(
-                    $this->text(
-                        'El panel respondió con HTTP %d. Revisa el ID y la clave.',
-                        'The control center returned HTTP %d. Check the site ID and agent key.'
-                    ),
-                    $code
-                )
-            );
-        }
+        return $payload;
+    }
 
+    public function register_snapshot_route(): void
+    {
+        register_rest_route('creative-pear-monitor/v1', '/snapshot', [
+            'methods' => 'POST',
+            'callback' => [$this, 'snapshot'],
+            'permission_callback' => [$this, 'authorize_snapshot'],
+        ]);
+    }
+
+    public function authorize_snapshot(WP_REST_Request $request)
+    {
+        $settings = (array) get_option(self::OPTION, []);
+        $site_id = absint($request->get_header('X-CP-Site-ID'));
+        $timestamp = absint($request->get_header('X-CP-Timestamp'));
+        $request_id = (string) $request->get_header('X-CP-Request-ID');
+        $signature = (string) $request->get_header('X-CP-Signature');
+        if (! $this->has_credentials($settings) || $site_id !== absint($settings['site_id'] ?? 0)
+            || abs(time() - $timestamp) > 120 || ! preg_match('/^[a-f0-9-]{36}$/iD', $request_id)) {
+            return new WP_Error('cp_snapshot_forbidden', 'Invalid snapshot request.', ['status' => 403]);
+        }
+        $expected = hash_hmac('sha256', $site_id.'|'.$timestamp.'|'.$request_id.'|read-snapshot', (string) $settings['key']);
+        if (! hash_equals($expected, $signature)) {
+            return new WP_Error('cp_snapshot_forbidden', 'Invalid snapshot signature.', ['status' => 403]);
+        }
+        $request_key = 'creative_pear_snapshot_'.hash('sha256', $request_id);
+        if (! add_option($request_key, time(), '', false)) {
+            return new WP_Error('cp_snapshot_replayed', 'Snapshot request already used.', ['status' => 409]);
+        }
+        global $wpdb;
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND CAST(option_value AS UNSIGNED) < %d", $wpdb->esc_like('creative_pear_snapshot_').'%', time() - 300));
+
+        return true;
+    }
+
+    public function snapshot(WP_REST_Request $request)
+    {
+        $settings = (array) get_option(self::OPTION, []);
+        $payload = get_transient('creative_pear_monitor_snapshot');
+        if (! is_array($payload)) {
+            if (! add_option('creative_pear_snapshot_lock', time(), '', false)) {
+                if ((int) get_option('creative_pear_snapshot_lock') < time() - 90) {
+                    delete_option('creative_pear_snapshot_lock');
+                }
+                return new WP_Error('cp_snapshot_busy', 'Snapshot collection in progress.', ['status' => 503]);
+            }
+            try {
+                $payload = $this->collect_report();
+                set_transient('creative_pear_monitor_snapshot', $payload, 60);
+            } catch (\Throwable $exception) {
+                return new WP_Error('cp_snapshot_collection', 'Snapshot collection failed.', ['status' => 503]);
+            } finally {
+                delete_option('creative_pear_snapshot_lock');
+            }
+        }
+        $request_id = (string) $request->get_header('X-CP-Request-ID');
+        $generated_at = time();
+        $signature = hash_hmac('sha256', $request_id.'|'.$generated_at.'|'.hash('sha256', wp_json_encode($payload)), (string) $settings['key']);
+        update_option('creative_pear_monitor_last_pull', time(), false);
         update_option('creative_pear_monitor_last_success', time(), false);
         update_option(self::CONNECTION_HASH_OPTION, $this->connection_hash($settings), false);
 
-        return true;
+        return new WP_REST_Response(['protocol' => 1, 'site_id' => absint($settings['site_id']), 'request_id' => $request_id,
+            'generated_at' => $generated_at, 'payload' => $payload, 'signature' => $signature], 200, ['Cache-Control' => 'no-store, private']);
     }
 
     private function has_credentials(array $settings): bool
