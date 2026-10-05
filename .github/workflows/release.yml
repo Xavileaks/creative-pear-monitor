@@ -26,7 +26,7 @@ jobs:
           sed -i -E "s/private const VERSION = '[^']+';/private const VERSION = '${VERSION}';/" creative-pear-monitor.php
           sed -i -E "s/^Stable tag: .*/Stable tag: ${VERSION}/" readme.txt
           mkdir -p build/creative-pear-monitor
-          rsync -a --exclude='.git' --exclude='.github' --exclude='build' --exclude='README.md' --exclude='.gitignore' ./ build/creative-pear-monitor/
+          rsync -a --exclude='.git' --exclude='.github' --exclude='build' --exclude='tests' --exclude='README.md' --exclude='.gitignore' ./ build/creative-pear-monitor/
           cd build
           zip -qr creative-pear-monitor.zip creative-pear-monitor
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
