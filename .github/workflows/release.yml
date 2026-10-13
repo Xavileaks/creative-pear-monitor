@@ -21,6 +21,7 @@ jobs:
           php -l includes/class-creative-pear-monitor-updater.php
           php tests/snapshot-auth.php
           php tests/update-agent.php
+          php tests/backup-account.php
 
       - name: Crear ZIP versionado
         id: package

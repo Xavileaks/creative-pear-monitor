@@ -19,6 +19,8 @@ final class Creative_Pear_Monitor
 {
     private const VERSION = '1.6.0';
 
+    private const BACKUP_DRIVE_ACCOUNT = 'team@creativepearagency.com';
+
     private const OPTION = 'creative_pear_monitor_settings';
 
     private const DASHBOARD_URL = 'https://status.creativepearagency.com';
@@ -1161,7 +1163,7 @@ final class Creative_Pear_Monitor
             'hcaptcha' => ['installed' => false, 'active' => false, 'configured' => null],
             'ai1wm' => ['installed' => false, 'active' => false, 'local_backup_count' => null,
                 'drive_extension_active' => false, 'drive_connected' => null,
-                'agency_account' => null, 'retention_correct' => null],
+                'agency_account' => null, 'account_policy' => self::BACKUP_DRIVE_ACCOUNT, 'retention_correct' => null],
         ];
 
         foreach ($plugins as $file => $plugin) {
@@ -1222,7 +1224,7 @@ final class Creative_Pear_Monitor
                 $account = $client->get_account_info();
                 $email = $account['user']['emailAddress'] ?? null;
                 if (is_string($email) && $email !== '') {
-                    $result['ai1wm']['agency_account'] = strcasecmp($email, 'web@creativepearagency.com') === 0;
+                    $result['ai1wm']['agency_account'] = strcasecmp(trim($email), self::BACKUP_DRIVE_ACCOUNT) === 0;
                 }
             } catch (\Throwable $exception) {
                 // An unreadable Google account must not create a misleading mismatch incident.
