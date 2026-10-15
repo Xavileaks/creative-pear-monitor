@@ -19,7 +19,7 @@ final class Creative_Pear_Monitor
 {
     private const VERSION = '1.6.0';
 
-    private const BACKUP_DRIVE_ACCOUNT = 'team@creativepearagency.com';
+    private const BACKUP_DRIVE_ACCOUNT = 'web@creativepearagency.com';
 
     private const OPTION = 'creative_pear_monitor_settings';
 

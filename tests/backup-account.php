@@ -24,17 +24,17 @@ $plugins = ['all-in-one-wp-migration/all-in-one-wp-migration.php'=>[],
 $GLOBALS['backup_options'] = ['ai1wm_backups_path'=>__DIR__.'/nonexistent-backups',
     'ai1wmge_gdrive_token'=>'test-token', 'ai1wmge_gdrive_backups'=>3, 'ai1wmge_gdrive_total'=>'0MB', 'ai1wmge_gdrive_days'=>0];
 function expect_backup($condition, $message) { if (!$condition) { throw new RuntimeException($message); } }
-foreach (['team@creativepearagency.com'=>true, 'TEAM@CreativePearAgency.com'=>true,
-    'web@creativepearagency.com'=>false, 'someone@example.com'=>false] as $email=>$expected) {
+foreach (['web@creativepearagency.com'=>true, 'WEB@CreativePearAgency.com'=>true,
+    'team@creativepearagency.com'=>false, 'someone@example.com'=>false] as $email=>$expected) {
     $GLOBALS['account_email'] = $email;
     $GLOBALS['account_error'] = false;
     $report = $method->invoke($monitor, $plugins, array_keys($plugins));
-    expect_backup($report['ai1wm']['account_policy'] === 'team@creativepearagency.com', 'Missing policy identity');
-    expect_backup($report['ai1wm']['agency_account'] === $expected, 'Wrong account accepted or team rejected');
+    expect_backup($report['ai1wm']['account_policy'] === 'web@creativepearagency.com', 'Missing policy identity');
+    expect_backup($report['ai1wm']['agency_account'] === $expected, 'Wrong account accepted or web rejected');
     expect_backup($report['ai1wm']['retention_correct'] === true, 'Retention rules changed');
     expect_backup(!str_contains(json_encode($report), 'test-token') && !array_key_exists('connected_email', $report['ai1wm']), 'Private account data leaked');
 }
 $GLOBALS['account_error'] = true;
 $report = $method->invoke($monitor, $plugins, array_keys($plugins));
 expect_backup($report['ai1wm']['agency_account'] === null, 'Unreadable account reported as a mismatch');
-echo "PASS: team account, case-insensitive match, other accounts rejected, unreadable account, retention preserved, no secrets\n";
+echo "PASS: web account, case-insensitive match, other accounts rejected, unreadable account, retention preserved, no secrets\n";
