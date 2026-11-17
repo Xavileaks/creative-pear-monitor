@@ -50,8 +50,13 @@ final class Creative_Pear_Monitor_Defender
         $path = (string) parse_url($uri, PHP_URL_PATH);
         parse_str((string) parse_url($uri, PHP_URL_QUERY), $query);
         $route = '/creative-pear-monitor/v1/defender-firewall';
+        $endpoint = rest_url(ltrim($route, '/'));
+        $expected_path = (string) parse_url($endpoint, PHP_URL_PATH);
+        parse_str((string) parse_url($endpoint, PHP_URL_QUERY), $expected_query);
         if (($server['REQUEST_METHOD'] ?? '') !== 'POST'
-            || (!preg_match('~/wp-json/creative-pear-monitor/v1/defender-firewall/?$~D', $path) && ($query['rest_route'] ?? '') !== $route)) {
+            || rtrim($path, '/') !== rtrim($expected_path, '/')
+            || (isset($query['rest_route']) && $query['rest_route'] !== $route)
+            || (isset($expected_query['rest_route']) && ($query['rest_route'] ?? '') !== $route)) {
             return false;
         }
         $headers = ['site' => $server['HTTP_X_CP_SITE_ID'] ?? '', 'time' => $server['HTTP_X_CP_TIMESTAMP'] ?? '',

@@ -31,6 +31,7 @@ namespace {
     function delete_option($key) { unset($GLOBALS['options'][$key]); }
     function delete_transient($key) { $GLOBALS['deleted_transients'][]=$key; }
     function is_multisite() { return $GLOBALS['multisite']??false; }
+    function rest_url($route) { return $GLOBALS['rest_url'] ?? 'https://example.com/subdir/wp-json/'.$route; }
     class WP_Error { public function __construct(public $code, public $message, public $data) {} }
     class WP_REST_Response { public function __construct(public $data,public $status=200,public $headers=[]) {} }
     class WP_REST_Request {
@@ -109,6 +110,16 @@ namespace {
     foreach(['X-CP-Site-ID','X-CP-Timestamp','X-CP-Request-ID','X-CP-Signature'] as $key) $server['HTTP_'.str_replace('-','_',strtoupper($key))]=$read->headers[$key];
     expect($rescue->invoke($agent,$server,$read->body),'Signed rescue request rejected');
     $server['REQUEST_URI']='/wp-admin/';expect(!$rescue->invoke($agent,$server,$read->body),'Rescue bypass applies to admin pages');
+    $server['REQUEST_URI']='/wp-admin/admin.php?rest_route=/creative-pear-monitor/v1/defender-firewall';
+    expect(!$rescue->invoke($agent,$server,$read->body),'Route parameter bypasses admin path restriction');
+    $server['REQUEST_URI']='/wp-admin/admin.php/wp-json/creative-pear-monitor/v1/defender-firewall';
+    expect(!$rescue->invoke($agent,$server,$read->body),'Suffix bypasses exact path restriction');
+    $server['REQUEST_URI']='/subdir/wp-json/creative-pear-monitor/v1/defender-firewall?rest_route=/wp/v2/users';
+    expect(!$rescue->invoke($agent,$server,$read->body),'Conflicting route accepted');
+    $GLOBALS['rest_url']='https://example.com/subdir/index.php?rest_route=/creative-pear-monitor/v1/defender-firewall';
+    $server['REQUEST_URI']='/subdir/index.php?rest_route=/creative-pear-monitor/v1/defender-firewall';
+    expect($rescue->invoke($agent,$server,$read->body),'Non-pretty REST route rejected');
+    unset($GLOBALS['rest_url']);
     $server['REQUEST_URI']='/wp-json/creative-pear-monitor/v1/defender-firewall';$server['REQUEST_METHOD']='GET';
     expect(!$rescue->invoke($agent,$server,$read->body),'Rescue bypass applies to another HTTP method');
     expect($agent->allow_signed_request(['127.0.0.1'])===['127.0.0.1'],'Normal visitors received bypass');
