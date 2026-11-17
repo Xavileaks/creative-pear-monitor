@@ -19,9 +19,11 @@ jobs:
         run: |
           php -l creative-pear-monitor.php
           php -l includes/class-creative-pear-monitor-updater.php
+          php -l includes/class-creative-pear-monitor-defender.php
           php tests/snapshot-auth.php
           php tests/update-agent.php
           php tests/backup-account.php
+          php tests/defender-firewall.php
 
       - name: Crear ZIP versionado
         id: package
