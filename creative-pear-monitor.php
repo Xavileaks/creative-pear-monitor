@@ -14,6 +14,7 @@
 defined('ABSPATH') || exit;
 
 require_once __DIR__.'/includes/class-creative-pear-monitor-updater.php';
+require_once __DIR__.'/includes/class-creative-pear-monitor-defender.php';
 
 final class Creative_Pear_Monitor
 {
@@ -42,6 +43,7 @@ final class Creative_Pear_Monitor
     public function __construct()
     {
         $this->updater = new Creative_Pear_Monitor_Updater(__FILE__, self::VERSION);
+        new Creative_Pear_Monitor_Defender();
         add_filter('cron_schedules', [$this, 'schedule']);
         add_action(self::EVENT, [$this, 'send_scheduled_report']);
         add_action(self::UPDATE_CHECK_EVENT, [$this->updater, 'refresh_update_notice']);
@@ -978,6 +980,7 @@ final class Creative_Pear_Monitor
                     'update_protocol' => 2,
                     'plugin_control_protocol' => 1,
                     'snapshot_protocol' => 1,
+                    'defender_control_protocol' => 1,
                 ],
                 'wordpress_login_url' => $this->wordpress_login_url($active),
                 'woocommerce' => $woocommerce,
